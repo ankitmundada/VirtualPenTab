@@ -1,5 +1,6 @@
 import Foundation
 import Network
+import PenCore
 
 private enum WireMessage {
     static let legacyVideoFrame: UInt8 = 0
@@ -21,6 +22,16 @@ private enum WireMessage {
     /// #41). Every payload byte has the high bit set, so old hosts that
     /// consume unknown types byte-by-byte skip the payload harmlessly.
     static let clientDecoderLimits: UInt8 = 11
+    /// Client→server, payload-free (old hosts consume 1 byte safely): "this
+    /// client can send stylus events". Sent during handshake, like types 9/11.
+    static let clientSupportsPen: UInt8 = 12
+    /// Server→client, 1-byte payload (feature flags). Sent ONLY to clients
+    /// that sent clientSupportsPen — same rule as codecSelected, because old
+    /// clients disconnect on unknown message types.
+    static let penEnabled: UInt8 = 13
+    /// Client→server, 23 bytes. Only ever sent after penEnabled is received,
+    /// so the payload needs no high-bit escaping. See PenEventCodec.
+    static let penEvent: UInt8 = 14
 }
 
 private extension NWEndpoint {
@@ -58,6 +69,14 @@ class StreamingServer {
     // immediately without parsing or dispatching to main queue.
     var touchEnabled: Bool = true
 
+    /// Decoded stylus samples. Separate from onTouchEvent because pen input
+    /// bypasses the trackpad gesture state machine entirely — a pen is direct
+    /// absolute pointing, not a gesture surface.
+    var onPenEvent: ((PenSample) -> Void)?
+    /// Whether the host advertises pen support. When false we never send the
+    /// penEnabled ack, so a pen-capable client silently falls back to touch.
+    var penInputEnabled: Bool = true
+
     // Wireless auth: when non-nil, non-loopback connections must present this
     // 32-byte token before being allowed to proceed. nil means wireless mode
     // is inactive — non-loopback connections are rejected immediately.
@@ -82,6 +101,7 @@ class StreamingServer {
     private var waitingForSyncFrame = false
     private var clientSupportsFrameMetadata = false
     private var clientIsAvcOnly = false
+    private var clientSupportsPen = false
     /// Max decode size reported by the connected client (issue #41).
     private(set) var clientDecodeLimits: (width: Int, height: Int)?
     private var inputBuffer = Data()
@@ -136,6 +156,7 @@ class StreamingServer {
         connectionReady = false
         clientSupportsFrameMetadata = false
         clientIsAvcOnly = false
+        clientSupportsPen = false
         clientDecodeLimits = nil
         waitingForSyncFrame = true
         inputBuffer.removeAll(keepingCapacity: true)
@@ -199,6 +220,14 @@ class StreamingServer {
             let msg = Data([WireMessage.codecSelected, codec.wireId])
             conn.send(content: msg, completion: .contentProcessed { _ in })
             debugLog("Sent codecSelected: H.264")
+        }
+        if clientSupportsPen && penInputEnabled {
+            // Safe to send: this client opted in via type 12. Until it sees
+            // this ack the client sends only touch frames, so a host without
+            // pen support never receives a message it cannot parse.
+            conn.send(content: Data([WireMessage.penEnabled, 0]),
+                      completion: .contentProcessed { _ in })
+            debugLog("Sent penEnabled — stylus input active")
         }
         // Synchronous, before sendDisplaySize(): the handler switches the
         // encoder AND updates displayWidth/Height (clamped for H.264) so the
@@ -415,6 +444,30 @@ class StreamingServer {
                 if !clientIsAvcOnly {
                     clientIsAvcOnly = true
                     debugLog("Client is AVC-only — will negotiate H.264")
+                }
+
+            case WireMessage.clientSupportsPen:
+                // Payload-free opt-in (same convention as types 8 and 9).
+                // Arrives before finishProtocolStartup, which sends the ack.
+                consumeInputBytes(1)
+                if !clientSupportsPen {
+                    clientSupportsPen = true
+                    debugLog("Client supports stylus input")
+                }
+
+            case WireMessage.penEvent:
+                guard inputBuffer.count >= PenEventCodec.frameSize else { return }
+                let frame = Data(inputBuffer.prefix(PenEventCodec.frameSize))
+                consumeInputBytes(PenEventCodec.frameSize)
+
+                // Drop after consuming the whole frame so that coalesced
+                // ping/keyframe messages behind it stay aligned.
+                guard penInputEnabled else { continue }
+                do {
+                    let sample = try PenEventCodec.decode(frame)
+                    DispatchQueue.main.async { self.onPenEvent?(sample) }
+                } catch {
+                    debugLog("Bad pen frame: \(error)")
                 }
 
             case WireMessage.clientDecoderLimits:

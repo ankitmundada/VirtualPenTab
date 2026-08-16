@@ -38,6 +38,18 @@ class StreamClient(
     /** Invoked when the server confirms the stream codec (true = HEVC). */
     var onCodecSelected: ((Boolean) -> Unit)? = null
 
+    /** Fired when the host acknowledges stylus support (wire type 13). */
+    var onPenEnabled: (() -> Unit)? = null
+
+    /**
+     * True once the host has acked `clientSupportsPen`. Pen frames must not be
+     * sent before this: an older host would read the 23-byte payload as a
+     * sequence of message types and desync its input stream.
+     */
+    @Volatile
+    var penSupported: Boolean = false
+        private set
+
     /** Stream codec for sync-frame parsing. HEVC unless the server says otherwise. */
     @Volatile var streamCodecIsHevc = true
         private set
@@ -126,8 +138,10 @@ class StreamClient(
                 outputStream = java.io.DataOutputStream(socket?.getOutputStream())
                 streamCodecIsHevc = true
                 codecNegotiated = false
+                penSupported = false
                 advertiseAvcOnlyIfNeeded() // MUST precede type 8: type 8 can trigger the server's early protocol finish
                 advertiseDecoderLimits() // Also before type 8, for the same reason
+                advertisePenSupport() // Also before type 8, for the same reason
                 advertiseFrameMetadataSupport()
                 isConnected = true
                 lastKeyframeReceivedNs = 0L
@@ -255,8 +269,10 @@ class StreamClient(
                 outputStream = java.io.DataOutputStream(s.getOutputStream())
                 streamCodecIsHevc = true
                 codecNegotiated = false
+                penSupported = false
                 advertiseAvcOnlyIfNeeded() // MUST precede type 8: type 8 can trigger the server's early protocol finish
                 advertiseDecoderLimits() // Also before type 8, for the same reason
+                advertisePenSupport() // Also before type 8, for the same reason
                 advertiseFrameMetadataSupport()
                 isConnected = true
                 diagLog("Wireless connected to $host:$port")
@@ -294,6 +310,17 @@ class StreamClient(
             out.writeByte(MESSAGE_CLIENT_AVC_ONLY)
             out.flush()
             diagLog("Advertised AVC-only (no HEVC decoder on this device)")
+        }
+    }
+
+    private fun advertisePenSupport() {
+        outputStream?.let { out ->
+            // Payload-free, like type 8/9: an old Mac consumes the single byte
+            // in its unknown-type branch and simply never acks, leaving
+            // penSupported false so we keep sending plain touch frames.
+            out.writeByte(PenCodec.MESSAGE_CLIENT_SUPPORTS_PEN)
+            out.flush()
+            diagLog("Advertised stylus support")
         }
     }
 
@@ -353,6 +380,14 @@ class StreamClient(
                             onLatencyMeasured?.invoke(rtt)
                         }
 
+                        PenCodec.MESSAGE_PEN_ENABLED -> {
+                            // 1-byte flags payload, reserved for future use.
+                            input.readByte()
+                            penSupported = true
+                            diagLog("Host enabled stylus input")
+                            onPenEnabled?.invoke()
+                        }
+
                         MESSAGE_CODEC_SELECTED -> {
                             val codecId = input.readByte().toInt()
                             streamCodecIsHevc = codecId == 0
@@ -405,6 +440,26 @@ class StreamClient(
                     }
                     buffer.putInt(action)
                     out.write(buffer.array())
+                    out.flush()
+                }
+            } catch (_: Exception) {
+            }
+        }
+    }
+
+    /**
+     * Sends one stylus sample. No-op until the host acks pen support.
+     *
+     * Shares [touchScope] with sendTouch so pen and touch frames cannot
+     * interleave mid-message on the socket.
+     */
+    fun sendPen(sample: PenSample) {
+        if (!isConnected || !penSupported) return
+
+        touchScope.launch {
+            try {
+                socket?.getOutputStream()?.let { out ->
+                    out.write(PenCodec.encode(sample))
                     out.flush()
                 }
             } catch (_: Exception) {

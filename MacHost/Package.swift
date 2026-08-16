@@ -15,9 +15,19 @@ let package = Package(
             targets: ["SideScreen"])
     ],
     targets: [
+        // Pure pen data types + wire codec. Kept as its own library target so
+        // it can be unit-tested by a plain executable — XCTest ships only with
+        // full Xcode, which a Command Line Tools checkout does not have.
+        .target(
+            name: "PenCore",
+            path: "PenCore"),
+        .executableTarget(
+            name: "PenCodecTest",
+            dependencies: ["PenCore"],
+            path: "PenCodecTest"),
         .executableTarget(
             name: "SideScreen",
-            dependencies: [],
+            dependencies: ["PenCore"],
             path: "Sources",
             cSettings: [
                 .unsafeFlags(["-I", "Sources"])

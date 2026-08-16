@@ -3,6 +3,7 @@ import SwiftUI
 import Combine
 import ApplicationServices
 import os.log
+import PenCore
 @preconcurrency import ScreenCaptureKit
 
 // Debug file logger - writes to /tmp/sidescreen.log
@@ -241,6 +242,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             .dropFirst()
             .sink { [weak self] enabled in
                 self?.streamingServer?.touchEnabled = enabled
+            }
+            .store(in: &cancellables)
+
+        // Same for stylus input. Turning it off mid-stroke must release any
+        // button the pen is holding, or it stays down system-wide.
+        settings.$penInputEnabled
+            .dropFirst()
+            .sink { [weak self] enabled in
+                self?.streamingServer?.penInputEnabled = enabled
+                if !enabled { self?.penInjector.reset() }
             }
             .store(in: &cancellables)
 
@@ -587,6 +598,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             // Setup server
             streamingServer = StreamingServer(port: settings.port)
             streamingServer?.touchEnabled = settings.touchEnabled
+            streamingServer?.penInputEnabled = settings.penInputEnabled
             if settings.connectionMode == .wireless {
                 streamingServer?.expectedAuthToken = WirelessAuth.loadOrCreate()
                 streamingServer?.onWirelessClientPaired = { [weak self] deviceName in
@@ -633,6 +645,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
             streamingServer?.onClientDisconnected = { [weak self] in
                 guard let self = self else { return }
+                // Unplugging the cable mid-stroke gives us no touch-up, so
+                // release the held button before anything else.
+                self.penInjector.reset()
                 Task { @MainActor in
                     self.settings.clientConnected = false
                     // Final lastConnected snapshot at the disconnect moment, then
@@ -648,6 +663,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
             streamingServer?.onTouchEvent = { [weak self] x, y, action, pointerCount, x2, y2 in
                 self?.handleTouch(x: x, y: y, action: action, pointerCount: pointerCount, x2: x2, y2: y2)
+            }
+
+            streamingServer?.onPenEvent = { [weak self] sample in
+                self?.handlePen(sample)
             }
 
             streamingServer?.onStats = { [weak self] fps, mbps in
@@ -688,6 +707,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func stopServer() {
+        // Before anything else: a stroke in progress must not leave its mouse
+        // button held down once the server is gone.
+        penInjector.reset()
+
         // Save display position before destroying
         virtualDisplayManager?.saveDisplayPosition()
 
@@ -707,6 +730,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Gesture Properties
 
     private let eventSource = CGEventSource(stateID: .hidSystemState)
+    /// Stylus events bypass the gesture state machine below entirely.
+    private let penInjector = PenInjector()
     private var accessibilityWarningShown = false
     private var gestureState: GestureState = .idle
     private var lastTouchTime: UInt64 = 0
@@ -769,6 +794,28 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         } else {
             handleOneFingerTouch(at: p1, action: action)
         }
+    }
+
+    // MARK: - Pen Entry Point
+
+    /// Stylus samples go straight to PenInjector — no gesture recognition, no
+    /// long-press wait, no scroll heuristic. See docs/pen-support-design.md §6.
+    func handlePen(_ sample: PenSample) {
+        guard settings.touchEnabled, settings.penInputEnabled else { return }
+
+        guard AXIsProcessTrusted() else {
+            if !accessibilityWarningShown {
+                accessibilityWarningShown = true
+                print("⚠️  Accessibility not granted - pen input ignored")
+                Task { @MainActor in
+                    settings.hasAccessibilityPermission = false
+                }
+            }
+            return
+        }
+
+        guard let displayID = virtualDisplayManager?.displayID else { return }
+        penInjector.handle(sample, in: CGDisplayBounds(displayID))
     }
 
     // MARK: - 1-Finger Gesture State Machine

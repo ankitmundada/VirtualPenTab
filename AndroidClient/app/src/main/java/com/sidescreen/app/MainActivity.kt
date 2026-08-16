@@ -70,6 +70,15 @@ class MainActivity : AppCompatActivity() {
     // Input prediction for low-latency gaming
     private val inputPredictor = InputPredictor()
 
+    /**
+     * Stylus path. Stays disabled — so stylus input falls through to the touch
+     * gestures below — until the host acks pen support.
+     *
+     * No InputPredictor here on purpose: extrapolating a pen position would
+     * bend the drawn line away from where the nib actually was.
+     */
+    private val penInput = PenInput { sample -> streamClient?.sendPen(sample) }
+
     // Checklist status handler
     private val checklistHandler = Handler(Looper.getMainLooper())
     private var checklistRunnable: Runnable? = null
@@ -355,13 +364,36 @@ class MainActivity : AppCompatActivity() {
         }
 
         binding.surfaceView.setOnTouchListener { view, event ->
-            handleTouch(view, event)
+            handlePointer(view, event)
             true
         }
         binding.textureView.setOnTouchListener { view, event ->
-            handleTouch(view, event)
+            handlePointer(view, event)
             true
         }
+
+        // Hover is only ever delivered to the hover listener, never to
+        // onTouchEvent, so the pen's in-range tracking needs its own hook.
+        binding.surfaceView.setOnHoverListener { view, event ->
+            penInput.handleHover(view, event, displayFlipHorizontal, displayFlipVertical)
+        }
+        binding.textureView.setOnHoverListener { view, event ->
+            penInput.handleHover(view, event, displayFlipHorizontal, displayFlipVertical)
+        }
+    }
+
+    /**
+     * Routes a pointer event to the stylus path or the touch path.
+     *
+     * A stylus goes straight to PenInjector on the host with pressure and
+     * tilt; anything else keeps the existing trackpad gesture emulation.
+     */
+    private fun handlePointer(
+        view: View,
+        event: MotionEvent,
+    ) {
+        if (penInput.handleTouch(view, event, displayFlipHorizontal, displayFlipVertical)) return
+        handleTouch(view, event)
     }
 
     private fun setupUI() {
@@ -1034,6 +1066,9 @@ class MainActivity : AppCompatActivity() {
                 if (connected) {
                     updateStatus("Connected - Streaming active")
                 } else {
+                    // The next host may not support pen; wait for a fresh ack.
+                    penInput.enabled = false
+                    penInput.reset()
                     updateStatus("Disconnected")
                 }
                 binding.connectButton.isEnabled = !connected
@@ -1086,6 +1121,12 @@ class MainActivity : AppCompatActivity() {
         }
 
         streamClient?.onCodecSelected = { isHevc -> onStreamCodecSelected(isHevc) }
+
+        streamClient?.onPenEnabled = {
+            penInput.reset()
+            penInput.enabled = true
+            log("🖊️ Stylus input enabled by host")
+        }
 
         streamClient?.onDisplaySize = { width, height, rotation, flipHorizontal, flipVertical ->
             mainDiag("onDisplaySize: ${width}x$height @ $rotation°, h=$flipHorizontal, v=$flipVertical")
@@ -1234,6 +1275,12 @@ class MainActivity : AppCompatActivity() {
                 }
 
                 streamClient?.onCodecSelected = { isHevc -> onStreamCodecSelected(isHevc) }
+
+        streamClient?.onPenEnabled = {
+            penInput.reset()
+            penInput.enabled = true
+            log("🖊️ Stylus input enabled by host")
+        }
 
                 streamClient?.onDisplaySize = { width, height, rotation, flipHorizontal, flipVertical ->
                     mainDiag("onDisplaySize: ${width}x$height @ $rotation°, h=$flipHorizontal, v=$flipVertical")
