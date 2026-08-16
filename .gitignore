@@ -51,7 +51,13 @@ dist/
 *.pem
 
 # Docs (local design docs)
-docs/
+# Matches contents rather than the directory itself: git will not descend
+# into an excluded directory, so `docs/` would make the negations below
+# unreachable.
+docs/*
+# ...except the pen-support docs, which are maintained with the code.
+!docs/pen-support.md
+!docs/pen-support-design.md
 
 # Temporary
 tmp/
