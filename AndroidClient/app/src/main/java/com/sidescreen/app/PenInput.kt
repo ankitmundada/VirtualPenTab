@@ -10,7 +10,7 @@ import android.view.View
  * docs/pen-support-design.md §5. Until then [enabled] stays false and stylus
  * input falls through to the ordinary touch path unchanged.
  */
-class PenInput(private val send: (PenSample) -> Unit) {
+class PenInput(private val send: (List<PenSample>) -> Unit) {
 
     /** Set from the host's `penEnabled` ack. */
     @Volatile
@@ -115,30 +115,33 @@ class PenInput(private val send: (PenSample) -> Unit) {
 
         val buttons = buttonsOf(event, pointerIndex)
         val contact = phase == PenPhase.DOWN || phase == PenPhase.MOVE
+        val replayHistory = phase == PenPhase.MOVE || phase == PenPhase.HOVER_MOVE
+        val historyCount = if (replayHistory) event.historySize else 0
+
+        // One list per MotionEvent, handed to StreamClient as a single write.
+        val batch = ArrayList<PenSample>(historyCount + 1)
 
         // Historical samples are always intermediate motion, never the
         // transition itself, so they carry MOVE/HOVER_MOVE.
         val historyPhase = if (contact) PenPhase.MOVE else PenPhase.HOVER_MOVE
-        if (phase == PenPhase.MOVE || phase == PenPhase.HOVER_MOVE) {
-            for (h in 0 until event.historySize) {
-                send(
-                    PenSample(
-                        phase = historyPhase,
-                        buttons = buttons,
-                        x = normalize(event.getHistoricalX(pointerIndex, h), width, flipHorizontal),
-                        y = normalize(event.getHistoricalY(pointerIndex, h), height, flipVertical),
-                        pressure = if (contact) event.getHistoricalPressure(pointerIndex, h) else 0f,
-                        tiltX = 0f,
-                        tiltY = 0f,
-                    ).withTilt(
-                        event.getHistoricalAxisValue(MotionEvent.AXIS_TILT, pointerIndex, h),
-                        event.getHistoricalOrientation(pointerIndex, h),
-                    )
+        for (h in 0 until historyCount) {
+            batch.add(
+                PenSample(
+                    phase = historyPhase,
+                    buttons = buttons,
+                    x = normalize(event.getHistoricalX(pointerIndex, h), width, flipHorizontal),
+                    y = normalize(event.getHistoricalY(pointerIndex, h), height, flipVertical),
+                    pressure = if (contact) event.getHistoricalPressure(pointerIndex, h) else 0f,
+                    tiltX = 0f,
+                    tiltY = 0f,
+                ).withTilt(
+                    event.getHistoricalAxisValue(MotionEvent.AXIS_TILT, pointerIndex, h),
+                    event.getHistoricalOrientation(pointerIndex, h),
                 )
-            }
+            )
         }
 
-        send(
+        batch.add(
             PenSample(
                 phase = phase,
                 buttons = buttons,
@@ -152,6 +155,8 @@ class PenInput(private val send: (PenSample) -> Unit) {
                 event.getOrientation(pointerIndex),
             )
         )
+
+        send(batch)
     }
 
     private fun PenSample.withTilt(tiltRadians: Float, orientationRadians: Float): PenSample {

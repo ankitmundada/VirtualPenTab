@@ -22,9 +22,18 @@ final class PenInjector {
     private var inProximity = false
     private var heldButton: CGMouseButton?
     private var lastPoint: CGPoint = .zero
+    private var cursorHidden = false
 
     /// True while a mouse button is held down on behalf of the pen.
     var isStrokeActive: Bool { heldButton != nil }
+
+    /// Hide the arrow cursor while the pen is in range.
+    ///
+    /// Injected mouse events necessarily carry a cursor position, so the arrow
+    /// tracks the nib and sits under the stroke. For touch that cursor is
+    /// essential — a finger emulates a trackpad and you need to see where you
+    /// are pointing — but for a pen the nib *is* the pointer, so it is noise.
+    var hideCursorInProximity = true
 
     // MARK: - Entry point
 
@@ -93,6 +102,9 @@ final class PenInjector {
             releaseHeldButton(at: lastPoint, sample: sample)
             exitProximity()
         }
+        // Unconditional: covers the case where proximity state was already
+        // cleared but a hide is still outstanding.
+        setCursorHidden(false)
     }
 
     private func releaseHeldButton(at point: CGPoint, sample: PenSample) {
@@ -106,13 +118,30 @@ final class PenInjector {
     private func enterProximity(eraser: Bool) {
         guard !inProximity else { return }
         inProximity = true
+        setCursorHidden(hideCursorInProximity)
         postProximity(entering: true, eraser: eraser)
     }
 
     private func exitProximity() {
         guard inProximity else { return }
         inProximity = false
+        setCursorHidden(false)
         postProximity(entering: false, eraser: false)
+    }
+
+    /// Cursor hiding is reference counted per process, so hide and show must be
+    /// balanced exactly — an unmatched hide would leave the Mac with no cursor
+    /// at all, which is far worse than the arrow we are trying to remove. The
+    /// `cursorHidden` flag guarantees at most one outstanding hide, and
+    /// `reset()` unwinds it on every teardown path.
+    private func setCursorHidden(_ hidden: Bool) {
+        guard hidden != cursorHidden else { return }
+        cursorHidden = hidden
+        if hidden {
+            CGDisplayHideCursor(CGMainDisplayID())
+        } else {
+            CGDisplayShowCursor(CGMainDisplayID())
+        }
     }
 
     private func postProximity(entering: Bool, eraser: Bool) {

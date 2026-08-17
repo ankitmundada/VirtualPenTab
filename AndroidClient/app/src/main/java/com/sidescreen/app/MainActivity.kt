@@ -77,7 +77,7 @@ class MainActivity : AppCompatActivity() {
      * No InputPredictor here on purpose: extrapolating a pen position would
      * bend the drawn line away from where the nib actually was.
      */
-    private val penInput = PenInput { sample -> streamClient?.sendPen(sample) }
+    private val penInput = PenInput { samples -> streamClient?.sendPen(samples) }
 
     // Checklist status handler
     private val checklistHandler = Handler(Looper.getMainLooper())

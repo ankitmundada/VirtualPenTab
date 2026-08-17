@@ -447,19 +447,38 @@ class StreamClient(
         }
     }
 
+    /** Reused across sends; only ever touched on [touchScope]'s single thread. */
+    private var penBatchBuffer = ByteArray(PenCodec.FRAME_SIZE * 16)
+
     /**
-     * Sends one stylus sample. No-op until the host acks pen support.
+     * Sends every sample from one MotionEvent as a single write.
+     *
+     * Batching matters more than it looks. A stylus reports at ~240 Hz and
+     * MotionEvent hands us the backlog as historical samples, so writing one
+     * frame at a time meant a coroutine dispatch, a socket write and a flush
+     * per sample. With TCP_NODELAY each flush is its own packet — ~240 packets
+     * a second carrying 23 bytes each, almost all header, plus scheduling
+     * jitter on every one. One write per MotionEvent cuts that to 60-120.
      *
      * Shares [touchScope] with sendTouch so pen and touch frames cannot
      * interleave mid-message on the socket.
      */
-    fun sendPen(sample: PenSample) {
-        if (!isConnected || !penSupported) return
+    fun sendPen(samples: List<PenSample>) {
+        if (!isConnected || !penSupported || samples.isEmpty()) return
 
         touchScope.launch {
             try {
+                val needed = samples.size * PenCodec.FRAME_SIZE
+                if (penBatchBuffer.size < needed) {
+                    penBatchBuffer = ByteArray(needed)
+                }
+                var offset = 0
+                for (sample in samples) {
+                    PenCodec.encodeInto(sample, penBatchBuffer, offset)
+                    offset += PenCodec.FRAME_SIZE
+                }
                 socket?.getOutputStream()?.let { out ->
-                    out.write(PenCodec.encode(sample))
+                    out.write(penBatchBuffer, 0, needed)
                     out.flush()
                 }
             } catch (_: Exception) {

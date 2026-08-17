@@ -1,7 +1,5 @@
 package com.sidescreen.app
 
-import java.nio.ByteBuffer
-import java.nio.ByteOrder
 import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.atan2
@@ -51,17 +49,32 @@ object PenCodec {
     const val BUTTON_BARREL2 = 2
     const val BUTTON_ERASER = 4
 
-    fun encode(s: PenSample): ByteArray {
-        val buf = ByteBuffer.allocate(FRAME_SIZE).order(ByteOrder.LITTLE_ENDIAN)
-        buf.put(MESSAGE_PEN_EVENT.toByte())
-        buf.put(s.phase.wire)
-        buf.put((s.buttons and 0b111).toByte())
-        buf.putFloat(clamp(s.x, 0f, 1f))
-        buf.putFloat(clamp(s.y, 0f, 1f))
-        buf.putFloat(clamp(s.pressure, 0f, 1f))
-        buf.putFloat(clamp(s.tiltX, -1f, 1f))
-        buf.putFloat(clamp(s.tiltY, -1f, 1f))
-        return buf.array()
+    fun encode(s: PenSample): ByteArray = ByteArray(FRAME_SIZE).also { encodeInto(s, it, 0) }
+
+    /**
+     * Writes one frame into an existing buffer at [offset].
+     *
+     * Allocation-free so a stroke can be encoded into a reused batch buffer:
+     * at 240 Hz a fresh ByteArray per sample is pure GC pressure, and a GC
+     * pause during a stroke is visible as a hitch in the drawn line.
+     */
+    fun encodeInto(s: PenSample, dest: ByteArray, offset: Int) {
+        dest[offset] = MESSAGE_PEN_EVENT.toByte()
+        dest[offset + 1] = s.phase.wire
+        dest[offset + 2] = (s.buttons and 0b111).toByte()
+        putFloatLE(dest, offset + 3, clamp(s.x, 0f, 1f))
+        putFloatLE(dest, offset + 7, clamp(s.y, 0f, 1f))
+        putFloatLE(dest, offset + 11, clamp(s.pressure, 0f, 1f))
+        putFloatLE(dest, offset + 15, clamp(s.tiltX, -1f, 1f))
+        putFloatLE(dest, offset + 19, clamp(s.tiltY, -1f, 1f))
+    }
+
+    private fun putFloatLE(dest: ByteArray, at: Int, value: Float) {
+        val bits = java.lang.Float.floatToIntBits(value)
+        dest[at] = (bits and 0xFF).toByte()
+        dest[at + 1] = ((bits ushr 8) and 0xFF).toByte()
+        dest[at + 2] = ((bits ushr 16) and 0xFF).toByte()
+        dest[at + 3] = ((bits ushr 24) and 0xFF).toByte()
     }
 
     /**

@@ -70,6 +70,31 @@ class PenCodecTest {
     }
 
     @Test
+    fun encodeIntoMatchesEncodeAtAnyOffset() {
+        val s = sample(phase = PenPhase.UP, buttons = 0b101, x = 0.1f, y = 0.9f)
+        val expected = PenCodec.encode(s)
+
+        val batch = ByteArray(PenCodec.FRAME_SIZE * 3) { 0x7F }
+        PenCodec.encodeInto(s, batch, PenCodec.FRAME_SIZE)
+
+        for (i in expected.indices) {
+            assertEquals("byte $i", expected[i], batch[PenCodec.FRAME_SIZE + i])
+        }
+    }
+
+    @Test
+    fun encodeIntoLeavesNeighbouringFramesUntouched() {
+        val guard: Byte = 0x7F
+        val batch = ByteArray(PenCodec.FRAME_SIZE * 3) { guard }
+        PenCodec.encodeInto(sample(), batch, PenCodec.FRAME_SIZE)
+
+        for (i in 0 until PenCodec.FRAME_SIZE) {
+            assertEquals("leading guard $i", guard, batch[i])
+            assertEquals("trailing guard $i", guard, batch[PenCodec.FRAME_SIZE * 2 + i])
+        }
+    }
+
+    @Test
     fun replacesNonFiniteWithZero() {
         // A digitizer glitch reporting NaN must not reach the host, which
         // rejects the whole frame on non-finite input.

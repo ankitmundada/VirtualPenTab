@@ -343,7 +343,11 @@ class ScreenCapture {
         config.minimumFrameInterval = CMTime(value: 1, timescale: CMTimeScale(fps))
         config.pixelFormat = kCVPixelFormatType_420YpCbCr8BiPlanarFullRange
         config.showsCursor = true
-        config.queueDepth = 4
+        // Each queued frame is a frame of latency before encode even starts.
+        // 3 is ScreenCaptureKit's documented floor; below that the stream
+        // starves. At 120 fps this trims ~8ms off the pipeline versus 4.
+        config.queueDepth = 3
+        debugLog("Capture queueDepth requested 3, effective \(config.queueDepth)")
         config.capturesAudio = false
         config.backgroundColor = .clear
         config.scalesToFit = false
