@@ -105,6 +105,52 @@ class VirtualDisplayManager {
         registerScreenParamsObserver()
     }
 
+    /// Selects the HiDPI mode explicitly after creation.
+    ///
+    /// A HiDPI virtual display is published with two modes: an anchor at the
+    /// full pixel size (which is what tells macOS the panel is high density)
+    /// and the logical mode at half that. Nothing chooses between them, and
+    /// macOS adopts the anchor — so a display configured as 1096x684 HiDPI
+    /// comes up as a 2192x1368 desktop at 1x scale. The pixels are right and
+    /// the UI is half the intended size.
+    ///
+    /// Must run after the display has settled, or the mode list is not yet
+    /// populated.
+    func applyPreferredMode(logicalWidth: Int, logicalHeight: Int, hiDPI: Bool) {
+        guard let displayID = displayID else { return }
+
+        let options = [kCGDisplayShowDuplicateLowResolutionModes: kCFBooleanTrue!] as CFDictionary
+        guard let modes = CGDisplayCopyAllDisplayModes(displayID, options) as? [CGDisplayMode] else {
+            debugLog("⚠️ Could not enumerate modes for virtual display")
+            return
+        }
+
+        let scale = hiDPI ? 2 : 1
+        let wanted = modes.first {
+            $0.width == logicalWidth && $0.height == logicalHeight
+                && $0.pixelWidth == logicalWidth * scale
+                && $0.pixelHeight == logicalHeight * scale
+        }
+
+        guard let mode = wanted else {
+            let available = modes
+                .map { "\($0.width)x\($0.height)@\($0.pixelWidth)x\($0.pixelHeight)" }
+                .joined(separator: ", ")
+            debugLog("⚠️ No \(scale)x mode for \(logicalWidth)x\(logicalHeight). Available: \(available)")
+            return
+        }
+
+        var config: CGDisplayConfigRef?
+        guard CGBeginDisplayConfiguration(&config) == .success else { return }
+        CGConfigureDisplayWithDisplayMode(config, displayID, mode, nil)
+        if CGCompleteDisplayConfiguration(config, .permanently) == .success {
+            debugLog("✅ Display mode set: \(mode.width)x\(mode.height) @ \(scale)x "
+                + "(\(mode.pixelWidth)x\(mode.pixelHeight) pixels)")
+        } else {
+            debugLog("⚠️ Failed to apply display mode")
+        }
+    }
+
     /// Re-assert the physical-main invariant on every display-topology change:
     /// WindowServer can re-adopt the virtual display as main from a remembered
     /// arrangement at any point after creation (issue #39), not only during

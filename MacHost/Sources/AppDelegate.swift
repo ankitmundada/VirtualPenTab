@@ -246,6 +246,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             // before asking ScreenCaptureKit to find it.
             try? await Task.sleep(nanoseconds: 500_000_000)
             virtualDisplayManager?.restoreDisplayPosition()
+            virtualDisplayManager?.applyPreferredMode(
+                logicalWidth: size.width, logicalHeight: size.height, hiDPI: settings.hiDPI)
 
             guard let displayID = virtualDisplayManager?.displayID else {
                 debugLog("❌ Reconfigure failed: no display ID — falling back to full restart")
@@ -379,10 +381,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // several of these at once, and without debouncing each one would kick
         // off its own display rebuild. hiDPI and refreshRate previously had no
         // observer at all, so changing them did nothing until a manual restart.
-        Publishers.Merge3(
+        // Rotation belongs here too: resolutionSize swaps width and height for
+        // 90/270, but that is only read when the display is created. Updating
+        // just the client transform left macOS with a landscape desktop being
+        // squeezed into a portrait view — the picture came out deformed until
+        // the server was restarted by hand.
+        Publishers.Merge4(
             settings.$resolution.dropFirst().removeDuplicates().map { _ in () },
             settings.$hiDPI.dropFirst().removeDuplicates().map { _ in () },
-            settings.$refreshRate.dropFirst().removeDuplicates().map { _ in () }
+            settings.$refreshRate.dropFirst().removeDuplicates().map { _ in () },
+            settings.$rotation.dropFirst().removeDuplicates().map { _ in () }
         )
         .debounce(for: .milliseconds(350), scheduler: DispatchQueue.main)
         .sink { [weak self] _ in
@@ -684,6 +692,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             }
 
             virtualDisplayManager?.restoreDisplayPosition()
+
+            // macOS otherwise adopts the 1x anchor mode and the desktop comes
+            // up at double the intended point size.
+            let logical = settings.resolutionSize
+            virtualDisplayManager?.applyPreferredMode(
+                logicalWidth: logical.width, logicalHeight: logical.height, hiDPI: settings.hiDPI)
 
             // Verify display is registered in the system
             if let vdm = virtualDisplayManager {
