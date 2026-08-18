@@ -21,13 +21,16 @@ let package = Package(
         .target(
             name: "PenCore",
             path: "PenCore"),
+        .target(
+            name: "DisplayCore",
+            path: "DisplayCore"),
         .executableTarget(
-            name: "PenCodecTest",
-            dependencies: ["PenCore"],
-            path: "PenCodecTest"),
+            name: "CoreTests",
+            dependencies: ["PenCore", "DisplayCore"],
+            path: "CoreTests"),
         .executableTarget(
             name: "SideScreen",
-            dependencies: ["PenCore"],
+            dependencies: ["PenCore", "DisplayCore"],
             path: "Sources",
             cSettings: [
                 .unsafeFlags(["-I", "Sources"])

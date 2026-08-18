@@ -135,6 +135,10 @@ clients disconnect on unknown message types"*. This design mirrors it.
 | 13 `penEnabled` | host → client | 1 byte (flags) | Ack; sent **only** to clients that sent type 12 |
 | 14 `penEvent` | client → host | 22 bytes | Sent **only** after the ack is received |
 
+Type 15 (`clientPanelInfo`) is also taken — it carries the client's real panel
+geometry for the display advisor, using the high-bit-set payload convention of
+type 11 rather than a capability ack. Next free type is 16.
+
 Because a pen frame is never transmitted until the host has explicitly
 confirmed it understands one, the payload can be plain little-endian binary
 matching the existing `sendTouch` framing — no bit-packing needed.

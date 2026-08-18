@@ -1190,7 +1190,9 @@ class MainActivity : AppCompatActivity() {
             try {
                 log("Connecting to $host:$port...")
 
-                streamClient = StreamClient(host, port)
+                // Context is needed to read the real panel geometry we report
+                // to the host, so both connect paths must supply it.
+                streamClient = StreamClient(host, port, applicationContext)
                 streamClient?.onFrameReceived = { frameData, frameSize, timestamp, isKeyframe ->
                     val dec = videoDecoder
                     if (dec != null) {

@@ -141,6 +141,7 @@ class StreamClient(
                 penSupported = false
                 advertiseAvcOnlyIfNeeded() // MUST precede type 8: type 8 can trigger the server's early protocol finish
                 advertiseDecoderLimits() // Also before type 8, for the same reason
+                advertisePanelInfo() // Also before type 8, for the same reason
                 advertisePenSupport() // Also before type 8, for the same reason
                 advertiseFrameMetadataSupport()
                 isConnected = true
@@ -272,6 +273,7 @@ class StreamClient(
                 penSupported = false
                 advertiseAvcOnlyIfNeeded() // MUST precede type 8: type 8 can trigger the server's early protocol finish
                 advertiseDecoderLimits() // Also before type 8, for the same reason
+                advertisePanelInfo() // Also before type 8, for the same reason
                 advertisePenSupport() // Also before type 8, for the same reason
                 advertiseFrameMetadataSupport()
                 isConnected = true
@@ -310,6 +312,23 @@ class StreamClient(
             out.writeByte(MESSAGE_CLIENT_AVC_ONLY)
             out.flush()
             diagLog("Advertised AVC-only (no HEVC decoder on this device)")
+        }
+    }
+
+    private fun advertisePanelInfo() {
+        val ctx = context ?: return
+        val info = PanelInfo.fromContext(ctx) ?: run {
+            diagLog("Panel geometry unavailable — host will fall back to defaults")
+            return
+        }
+        outputStream?.let { out ->
+            out.write(PanelInfoCodec.encode(info))
+            out.flush()
+            diagLog(
+                "Advertised panel ${info.widthPx}x${info.heightPx}, " +
+                    "${"%.1f".format(info.diagonalInches)}in, " +
+                    "${info.ppi.toInt()}ppi, ${info.refreshHz}Hz",
+            )
         }
     }
 

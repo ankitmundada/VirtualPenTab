@@ -1,5 +1,6 @@
 import Foundation
 import Network
+import DisplayCore
 import PenCore
 
 private enum WireMessage {
@@ -32,6 +33,10 @@ private enum WireMessage {
     /// Client→server, 23 bytes. Only ever sent after penEnabled is received,
     /// so the payload needs no high-bit escaping. See PenEventCodec.
     static let penEvent: UInt8 = 14
+    /// Client→server, 10-byte payload with the high bit set on every byte
+    /// (same convention as clientDecoderLimits): the client's real panel
+    /// geometry, which the host otherwise cannot know.
+    static let clientPanelInfo: UInt8 = 15
 }
 
 private extension NWEndpoint {
@@ -76,6 +81,10 @@ class StreamingServer {
     /// Whether the host advertises pen support. When false we never send the
     /// penEnabled ack, so a pen-capable client silently falls back to touch.
     var penInputEnabled: Bool = true
+
+    /// The client's real panel geometry, when it reports one.
+    var onPanelInfo: ((PanelInfo) -> Void)?
+    private(set) var clientPanelInfo: PanelInfo?
 
     // Wireless auth: when non-nil, non-loopback connections must present this
     // 32-byte token before being allowed to proceed. nil means wireless mode
@@ -157,6 +166,7 @@ class StreamingServer {
         clientSupportsFrameMetadata = false
         clientIsAvcOnly = false
         clientSupportsPen = false
+        clientPanelInfo = nil
         clientDecodeLimits = nil
         waitingForSyncFrame = true
         inputBuffer.removeAll(keepingCapacity: true)
@@ -444,6 +454,21 @@ class StreamingServer {
                 if !clientIsAvcOnly {
                     clientIsAvcOnly = true
                     debugLog("Client is AVC-only — will negotiate H.264")
+                }
+
+            case WireMessage.clientPanelInfo:
+                guard inputBuffer.count >= PanelInfoCodec.frameSize else { return }
+                let frame = Data(inputBuffer.prefix(PanelInfoCodec.frameSize))
+                consumeInputBytes(PanelInfoCodec.frameSize)
+                do {
+                    let info = try PanelInfoCodec.decode(frame)
+                    clientPanelInfo = info
+                    debugLog("Client panel: \(info.widthPx)x\(info.heightPx), "
+                        + String(format: "%.1f in, %.0f ppi, %dHz",
+                                 info.diagonalInches, info.ppi, info.refreshHz))
+                    DispatchQueue.main.async { self.onPanelInfo?(info) }
+                } catch {
+                    debugLog("Bad panel info: \(error)")
                 }
 
             case WireMessage.clientSupportsPen:

@@ -4,6 +4,7 @@ import Combine
 import ApplicationServices
 import os.log
 import PenCore
+import DisplayCore
 @preconcurrency import ScreenCaptureKit
 
 // Debug file logger - writes to /tmp/sidescreen.log
@@ -65,6 +66,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     /// item, auto-start racing a manual click) must not build a second virtual
     /// display / server. Main-actor confined.
     private var isStartingServer = false
+    /// Prevents overlapping in-place display rebuilds.
+    private var isReconfiguring = false
     var isDaemonMode = false // Deprecated: keeping variable for ABI compatibility but unused
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -198,6 +201,96 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// Rebuilds the virtual display and capture pipeline in place, keeping the
+    /// client's TCP connection alive.
+    ///
+    /// A resolution change genuinely requires a new CGVirtualDisplay — its
+    /// modes are fixed at creation — but that is no reason to drop the client.
+    /// Tearing down StreamingServer closes the socket, so the tablet
+    /// disconnects, the user re-pairs, and window positions are lost, which
+    /// makes trying different settings needlessly painful.
+    ///
+    /// The client already handles this: it reinitialises its decoder whenever a
+    /// displayConfig arrives, so it just needs the new geometry and a keyframe.
+    @MainActor
+    func reconfigureDisplay() async {
+        guard settings.isRunning, let server = streamingServer, !isReconfiguring else { return }
+        isReconfiguring = true
+        defer { isReconfiguring = false }
+
+        debugLog("♻️ Reconfiguring display in place — keeping client connected")
+
+        // Display bounds are about to change; a held pen button mapped to the
+        // old geometry must not survive into the new one.
+        penInjector.reset()
+
+        screenCapture?.stopStreaming()
+        screenCapture = nil
+
+        virtualDisplayManager?.saveDisplayPosition()
+        virtualDisplayManager?.destroyDisplay()
+
+        do {
+            virtualDisplayManager = VirtualDisplayManager()
+            let size = settings.resolutionSize
+            try virtualDisplayManager?.createDisplay(
+                width: size.width,
+                height: size.height,
+                refreshRate: settings.refreshRate,
+                hiDPI: settings.hiDPI,
+                name: "SideScreen"
+            )
+            try? virtualDisplayManager?.disableMirrorMode()
+
+            // Give the window server a moment to register the new display
+            // before asking ScreenCaptureKit to find it.
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            virtualDisplayManager?.restoreDisplayPosition()
+
+            guard let displayID = virtualDisplayManager?.displayID else {
+                debugLog("❌ Reconfigure failed: no display ID — falling back to full restart")
+                await restartServerFully()
+                return
+            }
+
+            screenCapture = try await ScreenCapture()
+            screenCapture?.onCaptureMethodChanged = { [weak self] method in
+                guard let self = self else { return }
+                debugLog("Capture method: \(method)")
+                Task { @MainActor in self.settings.captureMethod = method }
+            }
+            try await screenCapture?.setupForVirtualDisplay(
+                displayID, refreshRate: settings.effectiveRefreshRate)
+
+            settings.displayCreated = true
+
+            screenCapture?.startStreaming(
+                to: server,
+                bitrateMbps: settings.effectiveBitrate,
+                quality: settings.effectiveQuality,
+                gamingBoost: settings.gamingBoost,
+                frameRate: settings.effectiveRefreshRate
+            )
+
+            // Tell the still-connected client the new geometry, then force a
+            // keyframe so its freshly reinitialised decoder has a reference.
+            server.sendDisplaySize()
+            screenCapture?.requestKeyframeOrReplayCachedFrame(force: true)
+
+            debugLog("♻️ Reconfigure complete — client stayed connected")
+        } catch {
+            debugLog("❌ Reconfigure failed: \(error) — falling back to full restart")
+            await restartServerFully()
+        }
+    }
+
+    /// Last resort when an in-place reconfigure cannot complete.
+    @MainActor
+    private func restartServerFully() async {
+        stopServer()
+        await startServer()
+    }
+
     func setupSettingsObservers() {
         // Observer cho gaming boost changes
         settings.$gamingBoost
@@ -255,6 +348,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             }
             .store(in: &cancellables)
 
+        // Re-run the advisor when the size preference changes, so the
+        // suggestion tracks the picker instead of going stale until reconnect.
+        settings.$uiSizePreference
+            .dropFirst()
+            .sink { [weak self] _ in
+                guard let self = self, let panel = self.lastPanelInfo else { return }
+                DispatchQueue.main.async { self.handlePanelInfo(panel) }
+            }
+            .store(in: &cancellables)
+
         // Observer cho connection mode changes — restart server with new auth/ADB policy.
         settings.$connectionMode
             .dropFirst()
@@ -270,19 +373,26 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // server start, so a new resolution (list row or custom Apply) needs a
         // stop/start cycle to take effect, same as a connection-mode change.
         // Without this, changing resolution mid-run silently did nothing.
-        settings.$resolution
-            .dropFirst()
-            .removeDuplicates()
-            .sink { [weak self] resolution in
-                guard let self = self else { return }
-                Task { @MainActor in
-                    guard self.settings.isRunning else { return }
-                    debugLog("Resolution changed to \(resolution) — restarting server to rebuild virtual display")
-                    self.stopServer()
-                    await self.startServer()
-                }
+        // Resolution, HiDPI and refresh rate all require a new virtual display.
+        //
+        // Merged and debounced on purpose: applying a recommendation sets
+        // several of these at once, and without debouncing each one would kick
+        // off its own display rebuild. hiDPI and refreshRate previously had no
+        // observer at all, so changing them did nothing until a manual restart.
+        Publishers.Merge3(
+            settings.$resolution.dropFirst().removeDuplicates().map { _ in () },
+            settings.$hiDPI.dropFirst().removeDuplicates().map { _ in () },
+            settings.$refreshRate.dropFirst().removeDuplicates().map { _ in () }
+        )
+        .debounce(for: .milliseconds(350), scheduler: DispatchQueue.main)
+        .sink { [weak self] _ in
+            guard let self = self else { return }
+            Task { @MainActor in
+                guard self.settings.isRunning else { return }
+                await self.reconfigureDisplay()
             }
-            .store(in: &cancellables)
+        }
+        .store(in: &cancellables)
     }
 
     func setupMenuBar() {
@@ -669,6 +779,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.handlePen(sample)
             }
 
+            streamingServer?.onPanelInfo = { [weak self] info in
+                self?.handlePanelInfo(info)
+            }
+
             streamingServer?.onStats = { [weak self] fps, mbps in
                 let captured = self
                 Task { @MainActor in
@@ -793,6 +907,50 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             handleTwoFingerTouch(p1: p1, p2: p2, action: action)
         } else {
             handleOneFingerTouch(at: p1, action: action)
+        }
+    }
+
+    // MARK: - Panel Info
+
+    /// Computes a settings recommendation from the client's real panel.
+    ///
+    /// Advisory only — it is surfaced in Settings rather than applied, because
+    /// the "right" UI size depends on viewing distance and eyesight and so
+    /// cannot be derived from geometry alone.
+    /// Last panel the client reported, kept so the recommendation can be
+    /// recomputed when the UI size preference changes without waiting for a
+    /// reconnect.
+    private var lastPanelInfo: PanelInfo?
+
+    private func handlePanelInfo(_ info: PanelInfo) {
+        lastPanelInfo = info
+        let recommendation = DisplayAdvisor.recommend(
+            panel: info,
+            decoderMax: streamingServer?.clientDecodeLimits,
+            link: settings.connectionMode == .wireless ? .wireless : .usb,
+            preference: settings.uiSizePreference
+        )
+
+        debugLog(String(format: "📐 Client panel: %dx%d, %.1f in, %.0f ppi, %d Hz",
+                        info.widthPx, info.heightPx, info.diagonalInches,
+                        info.ppi, info.refreshHz))
+        debugLog("📐 Recommended: \(recommendation.width)x\(recommendation.height)"
+            + (recommendation.hiDPI ? " HiDPI" : "")
+            + " @ \(recommendation.refreshHz)Hz, \(recommendation.bitrateMbps) Mbps"
+            + (recommendation.pixelExact ? " (pixel-exact)" : ""))
+        for note in recommendation.notes { debugLog("📐   note: \(note)") }
+
+        Task { @MainActor in
+            self.settings.clientPanelSummary = String(
+                format: "%dx%d · %.1f in · %.0f ppi · %d Hz",
+                info.widthPx, info.heightPx, info.diagonalInches, info.ppi, info.refreshHz)
+            self.settings.recommendedSummary = "\(recommendation.width)x\(recommendation.height)"
+                + (recommendation.hiDPI ? " HiDPI" : "")
+                + " · \(recommendation.refreshHz) Hz · \(recommendation.bitrateMbps) Mbps"
+            self.settings.recommendedResolution = "\(recommendation.width)x\(recommendation.height)"
+            self.settings.recommendedHiDPI = recommendation.hiDPI
+            self.settings.recommendedRefreshRate = recommendation.refreshHz
+            self.settings.recommendedBitrate = recommendation.bitrateMbps
         }
     }
 

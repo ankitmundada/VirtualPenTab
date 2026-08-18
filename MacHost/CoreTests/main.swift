@@ -8,6 +8,7 @@
 //   swift run PenCodecTest
 
 import Cocoa
+import DisplayCore
 import Foundation
 import PenCore
 
@@ -47,6 +48,20 @@ func checkThrows(_ expected: PenDecodeError, _ label: String, _ body: () throws 
         failures += 1
         print("  FAIL  \(label): expected throw \(expected), got success")
     } catch let e as PenDecodeError where e == expected {
+        // pass
+    } catch {
+        failures += 1
+        print("  FAIL  \(label): expected \(expected), got \(error)")
+    }
+}
+
+func checkThrowsPanel(_ expected: PanelInfoError, _ label: String, _ body: () throws -> Void) {
+    checks += 1
+    do {
+        try body()
+        failures += 1
+        print("  FAIL  \(label): expected throw \(expected), got success")
+    } catch let e as PanelInfoError where e == expected {
         // pass
     } catch {
         failures += 1
@@ -254,6 +269,128 @@ do {
     } else {
         failures += 1; print("  FAIL  could not build proximity exit")
     }
+}
+
+// MARK: - Panel info
+//
+// Geometry is the Xiaomi Pad 5 the pen work was validated on: 2560x1600
+// across a 10.95 inch panel, 120 Hz.
+
+let padFive = PanelInfo(widthPx: 2560, heightPx: 1600,
+                        widthMm: 236, heightMm: 147, refreshHz: 120)
+
+section("panel info: derived geometry")
+checkClose(Float(padFive.diagonalInches), 10.95, "diagonal inches", tol: 0.1)
+checkClose(Float(padFive.ppi), 276, "panel ppi", tol: 2)
+checkClose(Float(padFive.aspectRatio), 1.6, "aspect ratio", tol: 0.01)
+checkClose(Float(padFive.logicalPointsPerInch(logicalWidth: 1280, logicalHeight: 800)),
+           138, "logical ppi at 1280x800", tol: 2)
+checkClose(Float(padFive.logicalPointsPerInch(logicalWidth: 1680, logicalHeight: 1050)),
+           181, "logical ppi at 1680x1050", tol: 2)
+
+section("panel info: codec round trip")
+do {
+    let encoded = PanelInfoCodec.encode(padFive)
+    checkEqual(encoded.count, PanelInfoCodec.frameSize, "frame is 11 bytes")
+    checkEqual(encoded.first, PanelInfoCodec.messageType, "type byte is 15")
+    // Every payload byte must have the high bit set so a host that does not
+    // know this message skips it one byte at a time without desyncing.
+    check(encoded.dropFirst().allSatisfy { $0 & 0x80 != 0 }, "payload bytes are high-bit safe")
+    if let back = try? PanelInfoCodec.decode(encoded) {
+        checkEqual(back, padFive, "round trip preserves geometry")
+    } else {
+        failures += 1; print("  FAIL  panel info did not round trip")
+    }
+}
+
+section("panel info: rejection")
+checkThrowsPanel(.truncated, "truncated frame") {
+    _ = try PanelInfoCodec.decode(PanelInfoCodec.encode(padFive).dropLast())
+}
+checkThrowsPanel(.malformedPayload, "payload without high bits") {
+    var bad = PanelInfoCodec.encode(padFive)
+    bad[3] = 0x01
+    _ = try PanelInfoCodec.decode(bad)
+}
+checkThrowsPanel(.implausibleGeometry, "zero-size panel") {
+    _ = try PanelInfoCodec.decode(PanelInfoCodec.encode(
+        PanelInfo(widthPx: 10, heightPx: 10, widthMm: 1, heightMm: 1, refreshHz: 60)))
+}
+
+// MARK: - Recommendation
+
+section("advisor: dense panel gets HiDPI at half the pixels")
+do {
+    let r = DisplayAdvisor.recommend(panel: padFive,
+                                     decoderMax: (8192, 4320),
+                                     link: .usb,
+                                     preference: .balanced)
+    checkEqual(r.width, 1280, "logical width")
+    checkEqual(r.height, 800, "logical height")
+    check(r.hiDPI, "HiDPI enabled on a 276 ppi panel")
+    check(r.pixelExact, "maps 1:1 onto the panel")
+    checkEqual(r.streamWidth, 2560, "streams at panel width")
+    checkEqual(r.refreshHz, 120, "refresh follows the panel")
+    check(r.bitrateMbps > 0, "bitrate is positive")
+}
+
+section("advisor: preference is never silently ignored")
+do {
+    // Regression: a wide snap tolerance made Larger and Balanced identical on
+    // this panel, discarding an explicit choice without saying so.
+    let bigger = DisplayAdvisor.recommend(panel: padFive, decoderMax: nil,
+                                          link: .usb, preference: .larger)
+    let balanced = DisplayAdvisor.recommend(panel: padFive, decoderMax: nil,
+                                            link: .usb, preference: .balanced)
+    let roomier = DisplayAdvisor.recommend(panel: padFive, decoderMax: nil,
+                                           link: .usb, preference: .moreSpace)
+
+    checkEqual(balanced.width, 1280, "balanced stays pixel-exact")
+    check(balanced.pixelExact, "balanced maps 1:1")
+    check(bigger.width < balanced.width, "larger really is larger")
+    check(roomier.width > balanced.width, "more space really is roomier")
+
+    // Each should land close to the size it promised.
+    for (label, r, pref) in [("larger", bigger, UISizePreference.larger),
+                             ("balanced", balanced, UISizePreference.balanced),
+                             ("moreSpace", roomier, UISizePreference.moreSpace)] {
+        let actual = padFive.logicalPointsPerInch(logicalWidth: r.width, logicalHeight: r.height)
+        checkClose(Float(actual), Float(pref.targetPointsPerInch),
+                   "\(label) hits its target ppi", tol: 12)
+    }
+
+    // Anything not pixel-exact must say so rather than quietly degrade.
+    check(!bigger.pixelExact && !bigger.notes.isEmpty, "larger explains the trade-off")
+    check(!roomier.pixelExact && !roomier.notes.isEmpty, "moreSpace explains the trade-off")
+}
+
+section("advisor: low-density panel never claims HiDPI")
+do {
+    // A budget 10 inch 1280x800 tablet: 151 ppi, below the Retina threshold.
+    let budget = PanelInfo(widthPx: 1280, heightPx: 800,
+                           widthMm: 216, heightMm: 135, refreshHz: 60)
+    check(budget.ppi < 200, "panel is below the Retina threshold")
+    let r = DisplayAdvisor.recommend(panel: budget, decoderMax: nil, link: .usb)
+    check(!r.hiDPI, "HiDPI stays off")
+    checkEqual(r.refreshHz, 60, "refresh follows the panel")
+}
+
+section("advisor: decoder limit is respected")
+do {
+    let r = DisplayAdvisor.recommend(panel: padFive,
+                                     decoderMax: (1920, 1080),
+                                     link: .usb)
+    check(r.streamWidth <= 1920, "stream width within decoder limit")
+    check(r.streamHeight <= 1080, "stream height within decoder limit")
+    check(!r.notes.isEmpty, "explains the clamp")
+}
+
+section("advisor: wireless gets a smaller bitrate budget")
+do {
+    let wired = DisplayAdvisor.recommend(panel: padFive, decoderMax: nil, link: .usb)
+    let air = DisplayAdvisor.recommend(panel: padFive, decoderMax: nil, link: .wireless)
+    check(air.bitrateMbps <= wired.bitrateMbps, "wireless cap is not higher")
+    check(air.bitrateMbps >= 5, "still a usable floor")
 }
 
 // MARK: - Summary
