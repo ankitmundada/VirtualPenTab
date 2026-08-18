@@ -96,10 +96,38 @@ cat > "$APP_DIR/Contents/Info.plist" << EOF
 </plist>
 EOF
 
-# Ad-hoc code sign to prevent Gatekeeper "damaged" error
-echo "Code signing (ad-hoc)..."
-codesign --force --deep --sign - --entitlements "$ROOT_DIR/MacHost/SideScreen.entitlements" "$APP_DIR"
-echo "  ✓ App signed"
+# Code sign to prevent Gatekeeper "damaged" error.
+#
+# Signing identity matters for more than Gatekeeper. An ad-hoc signature has no
+# certificate, so TCC identifies the app by its cdhash — a hash of the binary —
+# and every rebuild looks like a different app. That is why Accessibility and
+# Screen Recording have to be granted again after each build.
+#
+# Signing with a stable certificate keys those grants to the certificate plus
+# bundle ID instead, so they survive rebuilds. A free self-signed certificate
+# is enough; see docs/pen-support.md.
+SIGN_ID="${SIDESCREEN_SIGN_ID:-SideScreen Local Signing}"
+# Deliberately NOT `find-identity -v`: a self-signed certificate reports
+# CSSMERR_TP_NOT_TRUSTED and is filtered out by -v, yet it signs perfectly well.
+# Trust governs signature *verification*, not creation, and the resulting
+# designated requirement (bundle id + leaf certificate hash) is stable across
+# rebuilds either way — which is all TCC needs.
+SIGN_HASH=$(security find-identity -p codesigning 2>/dev/null \
+    | grep -F "$SIGN_ID" | head -1 | awk '{print $2}')
+if [ -n "$SIGN_HASH" ]; then
+    echo "Code signing (identity: $SIGN_ID)..."
+    codesign --force --deep --sign "$SIGN_HASH" \
+        --entitlements "$ROOT_DIR/MacHost/SideScreen.entitlements" "$APP_DIR"
+    echo "  ✓ App signed — permissions persist across rebuilds"
+else
+    echo "Code signing (ad-hoc)..."
+    codesign --force --deep --sign - \
+        --entitlements "$ROOT_DIR/MacHost/SideScreen.entitlements" "$APP_DIR"
+    echo "  ✓ App signed (ad-hoc)"
+    echo "  ⚠ macOS will ask for Accessibility and Screen Recording again after"
+    echo "    every rebuild. Create a '$SIGN_ID' certificate to stop that —"
+    echo "    see docs/pen-support.md."
+fi
 
 echo ""
 echo "Build successful!"

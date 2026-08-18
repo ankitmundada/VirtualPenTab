@@ -40,6 +40,37 @@ nothing: the stream looks perfect and the pen does absolutely nothing. The app
 logs `⚠️ Accessibility not granted - pen input ignored` once per session when
 this happens.
 
+### 1b. Stop macOS asking every rebuild
+
+If you build from source, an ad-hoc signature (`codesign --sign -`) has no
+certificate, so TCC identifies the app by its **cdhash** — a hash of the binary.
+Every rebuild changes it, macOS concludes it is a different app, and both
+permissions have to be granted again.
+
+A free self-signed certificate fixes this permanently:
+
+1. Open **Keychain Access** → menu **Keychain Access → Certificate Assistant →
+   Create a Certificate…**
+2. Name: **SideScreen Local Signing**
+3. Identity Type: **Self Signed Root**
+4. Certificate Type: **Code Signing**
+5. Create, then quit Keychain Access.
+
+`build_mac.sh` picks it up automatically on the next build — it looks for that
+name and falls back to ad-hoc signing if it is missing. Override the name with
+`SIDESCREEN_SIGN_ID` if you already have a Developer ID certificate.
+
+You do **not** need to mark the certificate as trusted. A self-signed
+certificate reports `CSSMERR_TP_NOT_TRUSTED` and is hidden by
+`security find-identity -v`, but it signs perfectly well — trust governs
+signature *verification*, not creation. The resulting designated requirement is
+`identifier "com.sidescreen.app" and certificate leaf = H"..."`, and both halves
+are stable across rebuilds, which is all TCC needs.
+
+Grant Accessibility and Screen Recording once more after the first
+certificate-signed build (the identity has genuinely changed), and they will
+stick from then on.
+
 ### 2. Turn stylus input on
 
 **Settings → Touch Control → Stylus Input.** On by default.
