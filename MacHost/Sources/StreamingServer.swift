@@ -104,9 +104,16 @@ class StreamingServer {
     /// only local evidence of that.
     private var inFlightBytes = 0
     private let inFlightLock = NSLock()
-    /// Peak in-flight bytes since the last stats tick.
-    private var peakInFlightBytes = 0
-    /// Reports peak in-flight bytes once per stats tick.
+    /// Lowest in-flight total seen since the last stats tick — the *trough*.
+    ///
+    /// Peak is the wrong statistic here. A single keyframe at 2560x1600 is
+    /// ~140 KB, so peak in-flight is dominated by one large frame and reads as
+    /// congestion on every GOP. The trough answers the question that actually
+    /// matters: did the send queue ever drain? If it returns to zero between
+    /// frames the link is keeping up, however large the peaks. If it never
+    /// empties, frames are genuinely backing up.
+    private var troughInFlightBytes = Int.max
+    /// Reports the trough once per stats tick.
     var onCongestionSample: ((Int) -> Void)?
     private var frameCount: UInt64 = 0
     private var droppedFrames: UInt64 = 0
@@ -600,20 +607,20 @@ class StreamingServer {
     private func addInFlight(_ delta: Int) {
         inFlightLock.lock()
         inFlightBytes = max(0, inFlightBytes + delta)
-        peakInFlightBytes = max(peakInFlightBytes, inFlightBytes)
+        troughInFlightBytes = min(troughInFlightBytes, inFlightBytes)
         inFlightLock.unlock()
     }
 
-    /// Peak backlog since the previous call, then resets the peak.
+    /// Trough backlog since the previous call, then rearms it.
     ///
-    /// Peak rather than instantaneous: sampling a single moment mostly catches
-    /// the gaps between frames and would read zero on a struggling link.
-    private func takePeakInFlight() -> Int {
+    /// Int.max means nothing was sent during the interval, which is not
+    /// congestion — report zero.
+    private func takeBacklogSample() -> Int {
         inFlightLock.lock()
-        let peak = peakInFlightBytes
-        peakInFlightBytes = inFlightBytes
+        let trough = troughInFlightBytes == Int.max ? 0 : troughInFlightBytes
+        troughInFlightBytes = inFlightBytes
         inFlightLock.unlock()
-        return peak
+        return trough
     }
 
     private func makeFramePacket(_ data: Data, timestamp: UInt64, isKeyframe: Bool) -> Data {
@@ -661,7 +668,7 @@ class StreamingServer {
             let mbps = Double(bytesSent * 8) / elapsed / 1_000_000
             let fps = Double(frameCount) / elapsed
             onStats?(fps, mbps)
-            onCongestionSample?(takePeakInFlight())
+            onCongestionSample?(takeBacklogSample())
 
             // Log pipeline latency profile
             if profiledFrameCount > 0 {

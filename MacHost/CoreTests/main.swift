@@ -456,7 +456,27 @@ do {
     let low = BitrateController.congestionThresholdBytes(forMbps: 5)
     let high = BitrateController.congestionThresholdBytes(forMbps: 400)
     check(high > low, "higher bitrate tolerates a larger backlog")
-    checkEqual(low, 64 * 1024, "small bitrates get the 64 KB floor")
+    checkEqual(low, 32 * 1024, "small bitrates get the 32 KB floor")
+}
+
+section("bitrate controller: a keyframe-sized burst is not congestion")
+do {
+    // Regression: the signal used to be peak in-flight, and a single 2560x1600
+    // keyframe (~140 KB) exceeded the threshold, so every GOP looked like
+    // congestion and drove the bitrate to the floor within seconds. The trough
+    // is what distinguishes a large burst from a queue that never drains.
+    var c = BitrateController(ceilingMbps: 18, floorMbps: 5, recoveryPatience: 5)
+    for _ in 0..<20 { c.observe(inFlightBytes: 0) }   // queue drains each tick
+    checkEqual(c.currentMbps, 18, "stays at ceiling while the queue drains")
+    check(!c.isThrottled, "not throttled by bursty-but-draining traffic")
+}
+
+section("bitrate controller: a queue that never drains is congestion")
+do {
+    var c = BitrateController(ceilingMbps: 18, floorMbps: 5)
+    let stuck = BitrateController.congestionThresholdBytes(forMbps: 18) + 1
+    c.observe(inFlightBytes: stuck)
+    check(c.currentMbps < 18, "backs off when the trough stays high")
 }
 
 // MARK: - Summary

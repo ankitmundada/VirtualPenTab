@@ -71,6 +71,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     /// Adapts bitrate to what the link actually carries. Only consulted in
     /// automatic mode — a manual bitrate is a deliberate choice to respect.
     private var bitrateController = BitrateController(ceilingMbps: 20)
+    /// Serialises encoder reconfiguration off the main thread.
+    ///
+    /// VTCompressionSessionSetProperty makes a *synchronous XPC call* into
+    /// VideoToolbox. Running that on the main thread deadlocks the whole app —
+    /// and doing it from inside a @Published setter is worse still, because the
+    /// reconfiguration then happens re-entrantly while the property is being
+    /// mutated.
+    private let encoderQueue = DispatchQueue(label: "encoderReconfigure", qos: .userInitiated)
     var isDaemonMode = false // Deprecated: keeping variable for ABI compatibility but unused
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -303,11 +311,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             .sink { [weak self] gamingBoost in
                 guard let self = self, self.settings.isRunning else { return }
                 print("🎮 Gaming Boost \(gamingBoost ? "ENABLED" : "DISABLED")")
-                self.screenCapture?.updateEncoderSettings(
-                    bitrateMbps: self.settings.effectiveBitrate,
-                    quality: self.settings.effectiveQuality,
-                    gamingBoost: gamingBoost
-                )
+                let bitrate = self.settings.effectiveBitrate
+                let quality = self.settings.effectiveQuality
+                self.encoderQueue.async { [weak self] in
+                    self?.screenCapture?.updateEncoderSettings(
+                        bitrateMbps: bitrate,
+                        quality: quality,
+                        gamingBoost: gamingBoost
+                    )
+                }
             }
             .store(in: &cancellables)
 
@@ -322,17 +334,25 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             settings.$recommendedBitrate.map { _ in () }
         )
         .dropFirst()
+        // Debounced so a burst of related changes rebuilds the session once.
+        .debounce(for: .milliseconds(250), scheduler: DispatchQueue.main)
         .sink { [weak self] _ in
             guard let self = self, self.settings.isRunning, !self.settings.gamingBoost else { return }
             let bitrate = self.settings.effectiveBitrate
             let quality = self.settings.effectiveQuality
-            print("⚙️ Encoder updated: \(bitrate)Mbps, \(quality)"
-                + (self.settings.autoEncoder ? " (automatic)" : ""))
-            self.screenCapture?.updateEncoderSettings(
-                bitrateMbps: bitrate,
-                quality: quality,
-                gamingBoost: false
-            )
+            let automatic = self.settings.autoEncoder
+            // Off the main thread: this recreates the compression session via a
+            // blocking XPC call, which hangs the app if run on main.
+            self.encoderQueue.async { [weak self] in
+                guard let self = self else { return }
+                debugLog("⚙️ Encoder updated: \(bitrate)Mbps, \(quality)"
+                    + (automatic ? " (automatic)" : ""))
+                self.screenCapture?.updateEncoderSettings(
+                    bitrateMbps: bitrate,
+                    quality: quality,
+                    gamingBoost: false
+                )
+            }
         }
         .store(in: &cancellables)
 
@@ -949,6 +969,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     /// Automatic mode only. If someone has chosen a bitrate by hand, silently
     /// overriding it would be worse than the stutter — the manual setting is an
     /// instruction, not a suggestion.
+    /// Called from the streaming server's stats tick, which is a serial queue —
+    /// so `bitrateController` has a single mutator and needs no lock.
     private func handleCongestionSample(_ peakInFlightBytes: Int) {
         guard settings.isRunning, settings.autoEncoder, !settings.gamingBoost else { return }
 
@@ -964,11 +986,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         debugLog("📉 Link \(next < previous ? "congested" : "recovering"): "
             + "\(previous) → \(next) Mbps (backlog \(peakInFlightBytes / 1024) KB)")
 
-        screenCapture?.updateEncoderSettings(
-            bitrateMbps: next,
-            quality: settings.effectiveQuality,
-            gamingBoost: false
-        )
+        let quality = settings.effectiveQuality
+        encoderQueue.async { [weak self] in
+            self?.screenCapture?.updateEncoderSettings(
+                bitrateMbps: next,
+                quality: quality,
+                gamingBoost: false
+            )
+        }
 
         Task { @MainActor in
             self.settings.adaptiveBitrate = next

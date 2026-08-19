@@ -34,12 +34,18 @@ public struct BitrateController: Equatable {
         self.currentMbps = self.ceilingMbps
     }
 
-    /// How many in-flight bytes count as congestion at a given bitrate.
+    /// How large a *persistent* backlog counts as congestion.
     ///
-    /// Roughly 50 ms of data. Below that a backlog is just normal jitter; above
-    /// it, frames are visibly queueing rather than being delivered.
+    /// Applied to the trough — the low-water mark of the send queue — not the
+    /// peak. A queue that drains to near zero between frames is healthy no
+    /// matter how big the peaks are, so this only needs to be above the noise
+    /// floor rather than above a keyframe.
+    ///
+    /// Measured on Wi-Fi carrying 2560x1600 video: an uncongested link troughs
+    /// at essentially zero, so 32 KB is comfortably clear of normal operation
+    /// while still catching a queue that is failing to empty.
     public static func congestionThresholdBytes(forMbps mbps: Int) -> Int {
-        max(64 * 1024, mbps * 1_000_000 / 8 / 20)
+        max(32 * 1024, mbps * 1_000_000 / 8 / 100)
     }
 
     /// Feeds one observation and returns the bitrate to use.
