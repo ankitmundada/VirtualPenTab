@@ -393,6 +393,72 @@ do {
     check(air.bitrateMbps >= 5, "still a usable floor")
 }
 
+// MARK: - Bitrate controller
+
+section("bitrate controller: starts at the ceiling")
+do {
+    let c = BitrateController(ceilingMbps: 40)
+    checkEqual(c.currentMbps, 40, "starts at ceiling")
+    check(!c.isThrottled, "not throttled initially")
+}
+
+section("bitrate controller: backs off under congestion")
+do {
+    var c = BitrateController(ceilingMbps: 40)
+    let over = BitrateController.congestionThresholdBytes(forMbps: 40) + 1
+    let first = c.observe(inFlightBytes: over)
+    check(first < 40, "drops below ceiling")
+    check(c.isThrottled, "reports throttled")
+    let second = c.observe(inFlightBytes: over)
+    check(second < first, "keeps dropping while congested")
+}
+
+section("bitrate controller: never below the floor")
+do {
+    var c = BitrateController(ceilingMbps: 40, floorMbps: 5)
+    for _ in 0..<50 { c.observe(inFlightBytes: 100 * 1024 * 1024) }
+    checkEqual(c.currentMbps, 5, "clamps at floor")
+}
+
+section("bitrate controller: recovers only after sustained calm")
+do {
+    var c = BitrateController(ceilingMbps: 40, floorMbps: 5, recoveryPatience: 3)
+    c.observe(inFlightBytes: 100 * 1024 * 1024)
+    let low = c.currentMbps
+    // Fewer calm samples than the patience threshold must not raise it.
+    c.observe(inFlightBytes: 0)
+    c.observe(inFlightBytes: 0)
+    checkEqual(c.currentMbps, low, "no premature recovery")
+    c.observe(inFlightBytes: 0)
+    check(c.currentMbps > low, "recovers after patience is met")
+}
+
+section("bitrate controller: recovery stops at the ceiling")
+do {
+    var c = BitrateController(ceilingMbps: 40, floorMbps: 5, recoveryPatience: 1)
+    c.observe(inFlightBytes: 100 * 1024 * 1024)
+    for _ in 0..<200 { c.observe(inFlightBytes: 0) }
+    checkEqual(c.currentMbps, 40, "returns to ceiling, no overshoot")
+    check(!c.isThrottled, "no longer throttled")
+}
+
+section("bitrate controller: ceiling changes are respected")
+do {
+    var c = BitrateController(ceilingMbps: 40)
+    c.updateCeiling(12)
+    checkEqual(c.currentMbps, 12, "current pulled down to new ceiling")
+    c.updateCeiling(2)
+    checkEqual(c.currentMbps, 5, "floor still wins over a silly ceiling")
+}
+
+section("bitrate controller: threshold scales with bitrate")
+do {
+    let low = BitrateController.congestionThresholdBytes(forMbps: 5)
+    let high = BitrateController.congestionThresholdBytes(forMbps: 400)
+    check(high > low, "higher bitrate tolerates a larger backlog")
+    checkEqual(low, 64 * 1024, "small bitrates get the 64 KB floor")
+}
+
 // MARK: - Summary
 
 print("")

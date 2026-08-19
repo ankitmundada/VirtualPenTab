@@ -96,6 +96,18 @@ class StreamingServer {
     private let receiveQueue = DispatchQueue(label: "receiveQueue", qos: .userInteractive)
     private let networkQueue = DispatchQueue(label: "networkQueue", qos: .userInteractive)
     private var bytesSent: UInt64 = 0
+    /// Bytes handed to the transport whose send completion has not yet fired.
+    ///
+    /// This is the congestion signal. Frames are queued without bound, so a
+    /// link that cannot keep up does not drop anything — the socket buffer
+    /// swallows the excess and latency climbs. A growing backlog here is the
+    /// only local evidence of that.
+    private var inFlightBytes = 0
+    private let inFlightLock = NSLock()
+    /// Peak in-flight bytes since the last stats tick.
+    private var peakInFlightBytes = 0
+    /// Reports peak in-flight bytes once per stats tick.
+    var onCongestionSample: ((Int) -> Void)?
     private var frameCount: UInt64 = 0
     private var droppedFrames: UInt64 = 0
     private var lastStatsTime = DispatchTime.now()
@@ -571,7 +583,9 @@ class StreamingServer {
 
             let packet = self.makeFramePacket(data, timestamp: timestamp, isKeyframe: isKeyframe)
 
+            self.addInFlight(packet.count)
             connection.send(content: packet, completion: .contentProcessed { error in
+                self.addInFlight(-packet.count)
                 if error != nil {
                     self.droppedFrames += 1
                 }
@@ -581,6 +595,25 @@ class StreamingServer {
             let sendAge = DispatchTime.now().uptimeNanoseconds - timestamp
             self.updateStats(bytes: data.count, frameAgeNs: sendAge)
         }
+    }
+
+    private func addInFlight(_ delta: Int) {
+        inFlightLock.lock()
+        inFlightBytes = max(0, inFlightBytes + delta)
+        peakInFlightBytes = max(peakInFlightBytes, inFlightBytes)
+        inFlightLock.unlock()
+    }
+
+    /// Peak backlog since the previous call, then resets the peak.
+    ///
+    /// Peak rather than instantaneous: sampling a single moment mostly catches
+    /// the gaps between frames and would read zero on a struggling link.
+    private func takePeakInFlight() -> Int {
+        inFlightLock.lock()
+        let peak = peakInFlightBytes
+        peakInFlightBytes = inFlightBytes
+        inFlightLock.unlock()
+        return peak
     }
 
     private func makeFramePacket(_ data: Data, timestamp: UInt64, isKeyframe: Bool) -> Data {
@@ -628,6 +661,7 @@ class StreamingServer {
             let mbps = Double(bytesSent * 8) / elapsed / 1_000_000
             let fps = Double(frameCount) / elapsed
             onStats?(fps, mbps)
+            onCongestionSample?(takePeakInFlight())
 
             // Log pipeline latency profile
             if profiledFrameCount > 0 {

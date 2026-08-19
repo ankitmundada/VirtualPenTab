@@ -335,8 +335,13 @@ struct SettingsView: View {
                             .controlSize(.mini)
                     }
 
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 0) {
+                    // Deliberately not a ScrollView. This sits inside the page's
+                    // own scroll view, and nesting the two means the inner list
+                    // captures the wheel with no way to tell which will move.
+                    // The window is resizable now, so the list can simply be as
+                    // tall as it needs to be.
+                    VStack(alignment: .leading, spacing: 0) {
+                        Group {
                             if settings.showAllResolutions {
                                 // Custom (Apply) values aren't in any preset group —
                                 // surface them so the selection is visible in the list.
@@ -388,7 +393,7 @@ struct SettingsView: View {
                             }
                         }
                     }
-                    .frame(height: settings.showAllResolutions ? 180 : 140)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                     .background(.ultraThinMaterial)
                     .cornerRadius(8)
                     .overlay(
@@ -852,6 +857,47 @@ struct SettingsView: View {
     private var streamingSection: some View {
         FrostedGroupBox(title: "Streaming Settings", icon: "antenna.radiowaves.left.and.right") {
             VStack(alignment: .leading, spacing: 16) {
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Automatic")
+                            .font(.system(size: 12, weight: .medium))
+                        Text(settings.autoEncoder
+                             ? "Bitrate and quality chosen from your tablet and connection"
+                             : "Set bitrate and quality yourself")
+                            .font(.system(size: 10))
+                            .foregroundColor(.secondary)
+                    }
+                    Spacer()
+                    Toggle("", isOn: $settings.autoEncoder)
+                        .labelsHidden()
+                }
+
+                if settings.autoEncoder {
+                    HStack {
+                        Text("In use")
+                            .font(.system(size: 11))
+                            .foregroundColor(.secondary)
+                        Spacer()
+                        Text(settings.isLinkThrottled && settings.adaptiveBitrate > 0
+                             ? "\(settings.adaptiveBitrate) Mbps · reduced for this link"
+                             : "\(settings.effectiveBitrate) Mbps · ultra-low latency")
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundColor(settings.isLinkThrottled ? .orange : .primary)
+                    }
+                    if settings.isLinkThrottled {
+                        Text("The connection could not carry \(settings.effectiveBitrate) Mbps, "
+                            + "so quality was lowered to keep latency down.")
+                            .font(.system(size: 10))
+                            .foregroundColor(.orange)
+                    }
+                    if settings.recommendedBitrate <= 0 {
+                        Text("Using the manual value until a tablet connects and reports its panel.")
+                            .font(.system(size: 10))
+                            .foregroundColor(.secondary)
+                    }
+                }
+
+                if !settings.autoEncoder {
                 // Bitrate
                 VStack(alignment: .leading, spacing: 10) {
                     HStack {
@@ -932,6 +978,7 @@ struct SettingsView: View {
                             .foregroundColor(.green)
                     }
                 }
+                }
             }
         }
     }
@@ -940,38 +987,56 @@ struct SettingsView: View {
     private var statusSection: some View {
         FrostedGroupBox(title: "Status", icon: "checkmark.circle") {
             VStack(alignment: .leading, spacing: 12) {
-                StatusRow(title: "Virtual Display",
+                StatusRow(title: "Virtual display",
                           status: settings.displayCreated ? "Active" : "Inactive",
                           color: settings.displayCreated ? .green : .secondary,
-                          hint: "The macOS virtual display we render into. Created when you click Start; the tablet streams its pixels.")
-                StatusRow(title: "Client Connected",
+                          subtitle: "The screen the tablet shows. Created when you press Start.",
+                          remedy: "Press Start to create it.",
+                          isOK: settings.displayCreated)
+
+                StatusRow(title: "Client connected",
                           status: settings.clientConnected ? "Yes" : "No",
                           color: settings.clientConnected ? .green : .secondary,
-                          hint: "Whether the Android client app currently has an active stream session.")
+                          subtitle: "Whether the tablet app has an active stream.",
+                          remedy: "Open Side Screen on the tablet and connect.",
+                          isOK: settings.clientConnected)
+
                 StatusRow(
-                    title: ProcessInfo.processInfo.operatingSystemVersion.majorVersion >= 26 ? "Screen & System Audio" : "Screen Recording",
+                    title: ProcessInfo.processInfo.operatingSystemVersion.majorVersion >= 26
+                        ? "Screen & system audio" : "Screen recording",
                     status: settings.hasScreenRecordingPermission ? "Granted" : "Required",
                     color: settings.hasScreenRecordingPermission ? .green : .red,
-                    hint: "macOS privacy permission required to capture the virtual display. Grant in System Settings → Privacy & Security → Screen Recording."
-                )
+                    subtitle: "Needed to capture the virtual display. Streaming cannot start without it.",
+                    remedy: "System Settings → Privacy & Security → Screen Recording.",
+                    isOK: settings.hasScreenRecordingPermission)
+
                 StatusRow(title: "Accessibility",
                           status: settings.hasAccessibilityPermission ? "Granted" : "Optional",
                           color: settings.hasAccessibilityPermission ? .green : .orange,
-                          hint: "Optional permission. Required only if you want touch/tap input from the tablet to control the Mac. Streaming works without it.")
+                          subtitle: "Needed for touch and stylus input. Video works without it.",
+                          remedy: "System Settings → Privacy & Security → Accessibility. "
+                                + "Without it the picture looks fine but the pen does nothing.",
+                          isOK: settings.hasAccessibilityPermission)
+
                 if settings.isRunning {
-                    StatusRow(title: "Capture Method",
+                    let usingFallback = settings.captureMethod.contains("fallback")
+                    StatusRow(title: "Capture method",
                               status: settings.captureMethod,
-                              color: settings.captureMethod.contains("fallback") ? .orange : .green,
-                              hint: "Which macOS API is currently capturing the virtual display. SCStream is the modern path; CGDisplayStream fallback activates if SCStream fails (e.g. on certain virtual display configs).")
+                              color: usingFallback ? .orange : .green,
+                              subtitle: "SCStream is the modern path; the older CGDisplayStream is a fallback.",
+                              remedy: "Running on the fallback path — expect lower performance.",
+                              isOK: !usingFallback)
                 }
 
-                // Mode-aware contextual rows
                 Divider().padding(.vertical, 4)
+
                 if settings.connectionMode == .usb {
                     StatusRow(title: "ADB installed",
                               status: settings.adbInstalled ? "Installed" : "Missing",
                               color: settings.adbInstalled ? .green : .red,
-                              hint: "USB mode tunnels the TCP stream through the cable using `adb reverse`. Requires the `adb` command on the Mac. Searched paths: Homebrew, /usr/local/bin, ~/Library/Android/sdk/platform-tools, and PATH (`which adb`).")
+                              subtitle: "USB mode tunnels the stream through the cable using adb.",
+                              remedy: "Install it, then press Start again.",
+                              isOK: settings.adbInstalled)
                     if !settings.adbInstalled {
                         Text("brew install android-platform-tools")
                             .font(.system(size: 10, design: .monospaced))
@@ -981,80 +1046,34 @@ struct SettingsView: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .textSelection(.enabled)
                     }
-                    StatusRow(title: "ADB reverse",
+
+                    StatusRow(title: "USB tunnel",
                               status: settings.adbReverseConfigured ? "OK" : "Pending",
                               color: settings.adbReverseConfigured ? .green : .orange,
-                              hint: "Whether `adb reverse tcp:\(settings.port) tcp:\(settings.port)` is currently configured. The Mac app sets this up automatically when you click Start. Goes green within ~2 seconds after the tablet is plugged in and authorized.")
+                              subtitle: "Port \(settings.port) forwarded to the tablet. Set up automatically.",
+                              remedy: "Turns green a couple of seconds after the tablet is plugged in and authorised.",
+                              isOK: settings.adbReverseConfigured)
+
                     StatusRow(title: "USB device",
                               status: settings.usbDeviceConnected ? "Detected" : "Not detected",
                               color: settings.usbDeviceConnected ? .green : .red,
-                              hint: "An Android device authorized for ADB and visible to your Mac. Plug in via USB-C and tap Allow on the device's USB debugging prompt.")
+                              subtitle: "A tablet visible to this Mac over USB.",
+                              remedy: "Plug in the cable and tap Allow on the tablet's debugging prompt.",
+                              isOK: settings.usbDeviceConnected)
                 } else {
-                    StatusRow(title: "WiFi",
+                    StatusRow(title: "Network",
                               status: settings.wifiConnected ? "Connected" : "Disconnected",
                               color: settings.wifiConnected ? .green : .red,
-                              hint: "Whether the Mac currently has a working internet route. Wireless mode requires the Mac to be on a WiFi (or Ethernet) network — the same network the tablet is on.")
+                              subtitle: "Wireless mode needs this Mac and the tablet on the same network.",
+                              remedy: "Connect this Mac to Wi-Fi or Ethernet.",
+                              isOK: settings.wifiConnected)
+
                     StatusRow(title: "Listening on",
                               status: settings.listeningAddress.map { "\($0):\(settings.port)" } ?? "—",
                               color: settings.listeningAddress != nil ? .green : .secondary,
-                              hint: "The LAN address the tablet must reach. The QR code embeds this exact host:port — if it changes (e.g. you switch WiFi), re-scan the new QR on the tablet.")
-                }
-
-                if !settings.hasScreenRecordingPermission {
-                    VStack(alignment: .leading, spacing: 8) {
-                        HStack(spacing: 6) {
-                            Image(systemName: "exclamationmark.triangle.fill")
-                                .foregroundColor(.orange)
-                            Text(ProcessInfo.processInfo.operatingSystemVersion.majorVersion >= 26 ? "Screen & System Audio Recording Required" : "Screen Recording Required")
-                                .font(.system(size: 12, weight: .medium))
-                        }
-                        Text(ProcessInfo.processInfo.operatingSystemVersion.majorVersion >= 26
-                            ? "Required to capture the virtual display. Go to System Settings > Privacy & Security > Screen & System Audio Recording."
-                            : "Required to capture the virtual display.")
-                            .font(.system(size: 11))
-                            .foregroundColor(.secondary)
-                        Button(action: {
-                            NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")!)
-                        }) {
-                            HStack {
-                                Image(systemName: "gear")
-                                Text("Open System Settings")
-                            }
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.small)
-                    }
-                    .padding(10)
-                    .background(Color.orange.opacity(0.1))
-                    .cornerRadius(8)
-                }
-
-                if !settings.hasAccessibilityPermission {
-                    VStack(alignment: .leading, spacing: 8) {
-                        HStack(spacing: 6) {
-                            Image(systemName: "hand.tap.fill")
-                                .foregroundColor(.blue)
-                            Text("Enable Touch Control")
-                                .font(.system(size: 12, weight: .medium))
-                        }
-                        Text("Control your Mac from your tablet.")
-                            .font(.system(size: 11))
-                            .foregroundColor(.secondary)
-                        Button(action: {
-                            NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!)
-                        }) {
-                            HStack {
-                                Image(systemName: "gear")
-                                Text("Open Settings")
-                            }
-                            .frame(maxWidth: .infinity)
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.small)
-                    }
-                    .padding(10)
-                    .background(Color.blue.opacity(0.08))
-                    .cornerRadius(8)
+                              subtitle: "The address the tablet connects to. The QR code contains it.",
+                              remedy: "No LAN address yet — connect to a network first.",
+                              isOK: settings.listeningAddress != nil)
                 }
             }
         }
@@ -1114,46 +1133,50 @@ struct SettingsView: View {
 
 // MARK: - Supporting Views
 
+/// A status line with its explanation visible rather than behind an info button.
+///
+/// The subtitle says what the row means and is always shown. The remedy says
+/// what to do about it and appears only when the row is not OK — advice for a
+/// problem you do not have is noise, and advice you have to hover to find is
+/// undiscoverable on a touch device.
 struct StatusRow: View {
     let title: String
     let status: String
     let color: Color
-    var hint: String?
-    @State private var showHint = false
-    @State private var hovering = false
+    /// Short, always-visible description of what this row reports.
+    var subtitle: String?
+    /// What to do when it is wrong. Only rendered when `isOK` is false.
+    var remedy: String?
+    var isOK: Bool = true
 
     var body: some View {
-        HStack {
-            Text(title)
-                .font(.system(size: 12))
-            if let hint = hint {
-                Button(action: { showHint.toggle() }) {
-                    Image(systemName: "info.circle")
-                        .font(.system(size: 11))
-                        .foregroundColor(hovering ? .accentColor : .secondary)
-                        .frame(width: 18, height: 18)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .onHover { hovering = $0 }
-                .help(hint)
-                .popover(isPresented: $showHint, arrowEdge: .top) {
-                    Text(hint)
-                        .font(.system(size: 12))
-                        .multilineTextAlignment(.leading)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .frame(width: 280, alignment: .leading)
-                        .padding(12)
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(title)
+                    .font(.system(size: 12))
+                Spacer()
+                HStack(spacing: 6) {
+                    Circle()
+                        .fill(color)
+                        .frame(width: 6, height: 6)
+                    Text(status)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(color)
                 }
             }
-            Spacer()
-            HStack(spacing: 6) {
-                Circle()
-                    .fill(color)
-                    .frame(width: 6, height: 6)
-                Text(status)
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundColor(color)
+
+            if let subtitle {
+                Text(subtitle)
+                    .font(.system(size: 10))
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            if !isOK, let remedy {
+                Text(remedy)
+                    .font(.system(size: 10))
+                    .foregroundColor(color == .red ? .red : .orange)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
     }
@@ -1324,8 +1347,20 @@ class DisplaySettings: ObservableObject {
     @Published var uiSizePreference: UISizePreference {
         didSet { save("uiSizePreference", uiSizePreference.rawValue) }
     }
+    /// Let the advisor pick bitrate and quality.
+    ///
+    /// On by default. Most people have no way to judge whether 300 or 700 Mbps
+    /// is right for their link, and the advisor already computes a cap from the
+    /// panel, the decoder limits and the connection type.
+    @Published var autoEncoder: Bool {
+        didSet { save("autoEncoder", autoEncoder) }
+    }
 
     // Populated from the client's reported panel; advisory only.
+    /// Bitrate the adaptive controller settled on, when it differs from the cap.
+    @Published var adaptiveBitrate: Int = 0
+    @Published var isLinkThrottled: Bool = false
+
     @Published var clientPanelSummary: String = ""
     @Published var recommendedSummary: String = ""
     @Published var recommendedResolution: String = ""
@@ -1399,6 +1434,7 @@ class DisplaySettings: ObservableObject {
         self.customHeight = defaults.object(forKey: keyPrefix + "customHeight") as? Int ?? 1200
         self.touchEnabled = defaults.object(forKey: keyPrefix + "touchEnabled") as? Bool ?? true
         self.penInputEnabled = defaults.object(forKey: keyPrefix + "penInputEnabled") as? Bool ?? true
+        self.autoEncoder = defaults.object(forKey: keyPrefix + "autoEncoder") as? Bool ?? true
         self.uiSizePreference = UISizePreference(
             rawValue: defaults.string(forKey: keyPrefix + "uiSizePreference") ?? ""
         ) ?? .balanced
@@ -1452,11 +1488,19 @@ class DisplaySettings: ObservableObject {
     }
 
     var effectiveBitrate: Int {
-        return gamingBoost ? 1000 : bitrate
+        if gamingBoost { return 1000 }
+        // recommendedBitrate is 0 until a client reports its panel; fall back
+        // to the manual value until then rather than streaming at nothing.
+        if autoEncoder, recommendedBitrate > 0 { return recommendedBitrate }
+        return bitrate
     }
 
     var effectiveQuality: String {
-        return gamingBoost ? "ultralow" : quality
+        if gamingBoost { return "ultralow" }
+        // Screen content is latency-sensitive, so automatic mode picks the
+        // fastest encoder preset and lets the bitrate cap carry image quality.
+        if autoEncoder { return "ultralow" }
+        return quality
     }
 
     var effectiveRefreshRate: Int {
@@ -1470,7 +1514,7 @@ class DisplaySettings: ObservableObject {
     func resetToDefaults() {
         let keys = ["resolution", "refreshRate", "hiDPI", "bitrate", "quality",
                     "gamingBoost", "port", "rotation", "flipHorizontal", "flipVertical", "showAllResolutions",
-                    "customWidth", "customHeight", "touchEnabled", "penInputEnabled",
+                    "customWidth", "customHeight", "touchEnabled", "penInputEnabled", "autoEncoder",
                     "autoStartStreamingOnLaunch", "startupMode"]
         for key in keys {
             defaults.removeObject(forKey: keyPrefix + key)
@@ -1491,6 +1535,7 @@ class DisplaySettings: ObservableObject {
         customHeight = 1200
         touchEnabled = true
         penInputEnabled = true
+        autoEncoder = true
         autoStartStreamingOnLaunch = false
         startupMode = .usb
 

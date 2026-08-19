@@ -68,6 +68,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var isStartingServer = false
     /// Prevents overlapping in-place display rebuilds.
     private var isReconfiguring = false
+    /// Adapts bitrate to what the link actually carries. Only consulted in
+    /// automatic mode — a manual bitrate is a deliberate choice to respect.
+    private var bitrateController = BitrateController(ceilingMbps: 20)
     var isDaemonMode = false // Deprecated: keeping variable for ABI compatibility but unused
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -308,19 +311,30 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             }
             .store(in: &cancellables)
 
-        // Observer cho bitrate/quality changes (chỉ khi không gaming boost)
-        Publishers.CombineLatest(settings.$bitrate, settings.$quality)
-            .dropFirst()
-            .sink { [weak self] bitrate, quality in
-                guard let self = self, self.settings.isRunning, !self.settings.gamingBoost else { return }
-                print("⚙️ Settings updated: \(bitrate)Mbps, \(quality)")
-                self.screenCapture?.updateEncoderSettings(
-                    bitrateMbps: bitrate,
-                    quality: quality,
-                    gamingBoost: false
-                )
-            }
-            .store(in: &cancellables)
+        // Encoder settings. Reads the *effective* values rather than the raw
+        // ones, so automatic mode picks up a new advisor recommendation the
+        // moment a client reports its panel — otherwise auto mode would sit on
+        // whatever the manual bitrate happened to be.
+        Publishers.Merge4(
+            settings.$bitrate.map { _ in () },
+            settings.$quality.map { _ in () },
+            settings.$autoEncoder.map { _ in () },
+            settings.$recommendedBitrate.map { _ in () }
+        )
+        .dropFirst()
+        .sink { [weak self] _ in
+            guard let self = self, self.settings.isRunning, !self.settings.gamingBoost else { return }
+            let bitrate = self.settings.effectiveBitrate
+            let quality = self.settings.effectiveQuality
+            print("⚙️ Encoder updated: \(bitrate)Mbps, \(quality)"
+                + (self.settings.autoEncoder ? " (automatic)" : ""))
+            self.screenCapture?.updateEncoderSettings(
+                bitrateMbps: bitrate,
+                quality: quality,
+                gamingBoost: false
+            )
+        }
+        .store(in: &cancellables)
 
         Publishers.CombineLatest3(settings.$rotation, settings.$flipHorizontal, settings.$flipVertical)
             .dropFirst()
@@ -797,6 +811,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.handlePanelInfo(info)
             }
 
+            streamingServer?.onCongestionSample = { [weak self] peakInFlight in
+                self?.handleCongestionSample(peakInFlight)
+            }
+
             streamingServer?.onStats = { [weak self] fps, mbps in
                 let captured = self
                 Task { @MainActor in
@@ -921,6 +939,40 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             handleTwoFingerTouch(p1: p1, p2: p2, action: action)
         } else {
             handleOneFingerTouch(at: p1, action: action)
+        }
+    }
+
+    // MARK: - Congestion
+
+    /// Feeds the send backlog to the bitrate controller and applies the result.
+    ///
+    /// Automatic mode only. If someone has chosen a bitrate by hand, silently
+    /// overriding it would be worse than the stutter — the manual setting is an
+    /// instruction, not a suggestion.
+    private func handleCongestionSample(_ peakInFlightBytes: Int) {
+        guard settings.isRunning, settings.autoEncoder, !settings.gamingBoost else { return }
+
+        let ceiling = settings.recommendedBitrate > 0 ? settings.recommendedBitrate : settings.bitrate
+        if bitrateController.ceilingMbps != ceiling {
+            bitrateController.updateCeiling(ceiling)
+        }
+
+        let previous = bitrateController.currentMbps
+        let next = bitrateController.observe(inFlightBytes: peakInFlightBytes)
+        guard next != previous else { return }
+
+        debugLog("📉 Link \(next < previous ? "congested" : "recovering"): "
+            + "\(previous) → \(next) Mbps (backlog \(peakInFlightBytes / 1024) KB)")
+
+        screenCapture?.updateEncoderSettings(
+            bitrateMbps: next,
+            quality: settings.effectiveQuality,
+            gamingBoost: false
+        )
+
+        Task { @MainActor in
+            self.settings.adaptiveBitrate = next
+            self.settings.isLinkThrottled = self.bitrateController.isThrottled
         }
     }
 
