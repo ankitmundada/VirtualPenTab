@@ -67,3 +67,10 @@ temp/
 
 # Local ktlint binary (CI downloads its own)
 AndroidClient/ktlint
+
+# Personal AI-assistant config. Machine-local by convention; never belongs in
+# a shared repo. (A project-level CLAUDE.md with build/test facts would be a
+# deliberate, separate choice — these are the per-user variants.)
+CLAUDE.local.md
+.claude/settings.local.json
+.claude/memory/
