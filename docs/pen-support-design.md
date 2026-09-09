@@ -1,6 +1,6 @@
 # Pen Support — Design
 
-**Status:** approved, implementation pending
+**Status:** implemented and validated on hardware
 **Date:** 2026-08-16
 **Branch:** `pen-support`
 **Scope:** local fork. Not currently intended for upstream submission.

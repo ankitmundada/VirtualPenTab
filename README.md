@@ -1,292 +1,208 @@
-<a id="readme-top"></a>
+# VirtualPenTab
 
-<div align="center">
+**Turn an Android tablet and its stylus into a pressure- and tilt-sensitive graphics tablet for your Mac — over USB or Wi-Fi, with the tablet doubling as a second display.**
 
-<img src="resources/logo/sidescreen-icon.png" alt="Side Screen" width="128"/>
+A fork of [SideScreen](https://github.com/tranvuongquocdat/SideScreen) that adds real pen input. Validated end-to-end on a **Xiaomi Pad 5 + Xiaomi Smart Pen → macOS 26**.
 
-<h1>Side Screen</h1>
-
-<p><em>Turn your Android tablet into a second display for macOS — USB-C or wireless over WiFi</em></p>
-
-<p>
-  <img src="https://img.shields.io/github/v/release/tranvuongquocdat/SideScreen?style=for-the-badge&label=version&color=blue" alt="Version">
-  <a href="https://github.com/tranvuongquocdat/SideScreen/blob/main/LICENSE">
-    <img src="https://img.shields.io/github/license/tranvuongquocdat/SideScreen?style=for-the-badge&color=34C759" alt="License">
-  </a>
-  <a href="https://github.com/tranvuongquocdat/SideScreen/stargazers">
-    <img src="https://img.shields.io/github/stars/tranvuongquocdat/SideScreen?style=for-the-badge&color=FF9500" alt="Stars">
-  </a>
-  <a href="https://github.com/tranvuongquocdat/SideScreen/releases">
-    <img src="https://img.shields.io/github/downloads/tranvuongquocdat/SideScreen/total?style=for-the-badge&color=8E44AD&label=downloads" alt="Downloads">
-  </a>
-</p>
-
-![Swift](https://img.shields.io/badge/Swift-FA7343?style=for-the-badge&logo=swift&logoColor=white)
-![Kotlin](https://img.shields.io/badge/Kotlin-7F52FF?style=for-the-badge&logo=kotlin&logoColor=white)
-![macOS](https://img.shields.io/badge/macOS_13+-000000?style=for-the-badge&logo=apple&logoColor=white)
-![Android](https://img.shields.io/badge/Android_8+-3DDC84?style=for-the-badge&logo=android&logoColor=white)
-![Universal Binary](https://img.shields.io/badge/Universal_Binary-Apple_Silicon_+_Intel-000000?style=for-the-badge&logo=apple&logoColor=white)
-
-</div>
+```
+Mac desktop ──H.265──▶ tablet screen        (SideScreen already did this)
+Mac apps    ◀──pen───  tablet stylus        (this fork adds this)
+```
 
 ---
 
-<div align="center">
-  <img src="resources/screenshots/hero_screenshot.jpeg" alt="Side Screen — Mac + Android tablet as second display" width="800"/>
-</div>
+## Why
 
----
+Every open-source "tablet as second display" tool treats the stylus as a finger. None of them deliver **pressure or tilt** to macOS, so drawing apps see a mouse, not a pen:
 
-## About
-
-Side Screen brings true second-display functionality to your Android tablet — over USB-C cable for the lowest latency, or wirelessly over WiFi after a one-time QR pair. Something macOS doesn't natively support either way.
-
-While Apple's Sidecar only works with iPads, millions of Android tablets sit unused as potential workstations. Side Screen bridges that gap with hardware-accelerated H.265 streaming, sub-16ms pipeline latency on USB, and full touch input — making your tablet feel like a real monitor, not a laggy mirror.
-
-Built entirely open-source, Side Screen is designed to be fast, lightweight, and seamlessly integrated.
-
-For full details, features, and documentation, please visit **[sidescreen.dev](https://sidescreen.dev)**
-
-<p align="right"><a href="#readme-top">↑ Back to top</a></p>
-
----
-
-## Features
-
-### USB-C or Wireless
-
-Two ways to connect, same picture quality. **USB-C** plugs in the cable for the lowest possible latency — adb-reverse port forwarding is set up automatically. **Wireless** lets you scan a QR code from the Mac once and the tablet auto-reconnects on every future launch over WiFi (5 GHz strongly recommended). The auth token is generated locally and stays on your Mac; reset it any time to revoke access.
-
-### Virtual Display
-
-Create a true virtual display on your Mac. Drag windows to your tablet like a real monitor — not mirroring, but extending.
-
-<div align="center">
-  <img src="resources/screenshots/feature_virtual_display.png" alt="Virtual Display in macOS Display Preferences" width="600"/>
-</div>
-
-### Ultra-Low Latency
-
-Hardware-accelerated H.265 encoding on Mac and decoding on Android. Async pipeline architecture delivers frames in under 30ms.
-
-<div align="center">
-  <img src="resources/screenshots/android_performance.png" alt="Low Latency Streaming with Stats Overlay" width="700"/>
-</div>
-
-### Touch Support
-
-Use your tablet's touchscreen to interact with macOS. Touch prediction compensates for network latency, making taps and drags feel natural.
-
-### HiDPI (Retina) Support
-
-Enable HiDPI mode to render at 2× resolution internally — text and icons are sharp at any logical resolution, just like a MacBook Retina display. Perfect for users with 2K/4K tablets who want a readable workspace without sacrificing sharpness.
-
-### Gaming Mode
-
-Enable Gaming Boost for optimized settings: 1 Gbps bitrate, ultra-low latency encoding, 120 FPS.
-
-### Customizable
-
-Configure resolution (up to 4K/8K), frame rate (30–120 FPS), bitrate (20–5000 Mbps), and quality presets from the Mac app.
-
-<div align="center">
-  <img src="resources/screenshots/mac_settings_1.png" alt="macOS Settings — Display & FPS" height="500"/>
-  &nbsp;&nbsp;
-  <img src="resources/screenshots/mac_settings_2.png" alt="macOS Settings — Streaming & Status" height="500"/>
-  &nbsp;&nbsp;
-  <img src="resources/screenshots/android_settings.png" alt="Android — Connection Screen" height="500"/>
-</div>
-
-### Headless / portable Mac (new in 0.11.0)
-
-Run a Mac with no display of its own — a Mac Studio or Mini on the go, or a laptop in clamshell — using the tablet as its only screen. Enable Launch at Login and Auto-start streaming, and the Mac boots straight into serving the tablet, with nothing to press on the Mac.
-
-<p align="right"><a href="#readme-top">↑ Back to top</a></p>
-
----
-
-## Requirements
-
-| | macOS Host | Android Client |
+| Project | Second display | Pen pressure on macOS |
 |---|---|---|
-| **OS** | macOS 13 (Ventura)+ | Android 8.0 (API 26)+ |
-| **Hardware** | Apple Silicon or Intel | H.265 hardware decoder |
-| **USB mode** | USB-C port + `adb` (`brew install android-platform-tools`) | USB-C cable + USB Debugging enabled |
-| **Wireless mode** | Same WiFi network as the tablet (5 GHz recommended) | Camera (for QR scan) + Google Play Services (for ML Kit barcode) |
+| [SideScreen](https://github.com/tranvuongquocdat/SideScreen) | ✅ | ❌ touch only — could not even draw a continuous line ([#45](https://github.com/tranvuongquocdat/SideScreen/issues/45)) |
+| [Deskreen](https://github.com/pavlobu/deskreen) | ✅ | ❌ no input at all |
+| [BetterCast](https://github.com/StephenLovino/BetterCast) | ✅ | ❌ |
+| [Weylus](https://github.com/H-M-H/Weylus) | ✅ | ⚠️ **Linux only** |
+| **VirtualPenTab** | ✅ | **✅ pressure, two-axis tilt, hover, barrel buttons** |
 
----
+The hardware has always had the data. The Pad 5's digitizer reports **4096 pressure levels and ±60° tilt on two independent axes**; macOS has accepted synthetic tablet events since the Wacom era. Nobody had wired the two together.
 
-## Installation
+## What
 
-Download the latest release from [**GitHub Releases**](https://github.com/tranvuongquocdat/SideScreen/releases):
+| Feature | Status | Notes |
+|---|---|---|
+| Pressure | ✅ verified | Varies stroke width in OneNote, Freeform, any app reading `NSEvent.pressure` |
+| Tilt (X and Y) | ✅ carried | Two independent axes, not collapsed to one. *Sign convention unverified — see [Status](#status)* |
+| Hover | ✅ verified | Cursor tracks the pen before it touches; arrow hides while the pen is in range |
+| Barrel button → right-click | 🔧 implemented | Not yet exercised on hardware |
+| Eraser tip | 🔧 implemented | Not yet exercised on hardware |
+| Continuous strokes | ✅ verified | Fixes upstream #45 — a pen is absolute pointing, not a trackpad gesture |
+| USB and Wi-Fi | ✅ both verified | USB via `adb reverse`; Wi-Fi via QR pairing |
+| Display advisor | ✅ verified | Tablet reports its real panel; host recommends resolution / HiDPI / refresh / bitrate |
+| Live reconfiguration | ✅ verified | Change resolution, HiDPI, refresh or rotation **without dropping the connection** |
+| Adaptive bitrate | ✅ verified on Wi-Fi | AIMD backoff when the link can't keep up; recovers without oscillating |
+| Redesigned Mac app | ✅ | Sidebar navigation, resizable, Start/Stop always visible, QR first in wireless mode |
 
-- **macOS**: Download `.dmg`, open it, drag Side Screen to Applications
-- **Android**: Download `.apk`, install on your tablet (enable "Unknown sources" if needed). Port forwarding is handled automatically by the Mac app.
+Plus everything SideScreen already had: virtual display, H.265 hardware encode/decode, multi-touch gestures, HiDPI, headless mode.
 
-> **⚠️ macOS Gatekeeper**
-> If macOS says the app is "damaged", open Terminal and run:
-> ```bash
-> sudo xattr -cr /Applications/SideScreen.app
-> ```
-> Then open the app again. This is needed because the app is not notarized with an Apple Developer certificate.
+## How it works
 
-> **⚠️ ADB Required**
-> The Mac app needs `adb` to communicate with your Android device. If the app doesn't show "Running" after launch, you likely need to install ADB:
->
-> 1. Install Homebrew (if you don't have it):
->    ```bash
->    /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
->    ```
-> 2. Install ADB:
->    ```bash
->    brew install --cask android-platform-tools
->    ```
+Two independent streams flow in opposite directions over one TCP connection.
 
-<details>
-<summary><strong>Build from source (for developers)</strong></summary>
+```mermaid
+flowchart LR
+    subgraph mac [Mac]
+        VD[Virtual display<br/>CGVirtualDisplay]
+        ENC[VideoToolbox<br/>H.265 encode]
+        INJ[PenInjector<br/>CGEvent tablet events]
+        APPS[macOS apps]
+    end
+    subgraph tab [Android tablet]
+        DEC[MediaCodec<br/>H.265 decode]
+        SCR[Screen]
+        PEN[Stylus]
+        PI[PenInput<br/>MotionEvent capture]
+    end
+    VD --> ENC -- "video frames" --> DEC --> SCR
+    PEN --> PI -- "23-byte pen frames" --> INJ --> APPS
+```
+
+### The pen path
+
+```mermaid
+flowchart TD
+    A["Xiaomi Smart Pen<br/>4096 pressure levels, ±60° tilt, ~240 Hz"]
+    B["PenInput.kt<br/>replays batched samples · polar tilt → tiltX/tiltY"]
+    C["23-byte frame, wire type 14<br/>phase · buttons · x · y · pressure · tiltX · tiltY"]
+    D["PenEventCodec.swift<br/>decode · clamp edges · reject NaN"]
+    E["PenInjector.swift<br/>mouse events + tabletPoint subtype<br/>proximity · held-button safety · cursor hiding"]
+    F["Photoshop · Freeform · OneNote · Blender · …"]
+    A --> B --> C --> D --> E --> F
+```
+
+Three details that decide whether strokes feel right:
+
+- **Every batched sample is replayed.** Android coalesces the pen's ~240 Hz stream to the display's vsync; reading only the latest position throws most of it away and gives polygonal strokes.
+- **Tilt stays two-dimensional.** Android reports polar tilt + azimuth; macOS wants Cartesian tiltX/tiltY. Collapsing to one value discards pen direction.
+- **Both pressure fields are set.** Apps read `NSEvent.pressure`, which is backed by `kCGMouseEventPressure`, *not* `kCGTabletEventPointPressure`. Set only the tablet field and every stroke arrives at full pressure. This one cost an afternoon.
+
+### The handshake
+
+Pen frames are never sent to a host that hasn't said it understands them, so a mismatched client/host pair degrades to plain touch instead of corrupting the input stream.
+
+```mermaid
+sequenceDiagram
+    participant T as Tablet
+    participant M as Mac
+    T->>M: type 12 · clientSupportsPen (no payload)
+    T->>M: type 15 · clientPanelInfo (real panel geometry)
+    Note over M: old host: skips unknown bytes, never acks
+    M-->>T: type 13 · penEnabled
+    Note over T: only now are pen frames allowed
+    loop every MotionEvent
+        T->>M: type 14 · penEvent ×N (one write per batch)
+    end
+```
+
+### Measured on the reference hardware
+
+| | USB | Wi-Fi (5 GHz, −69 dBm) |
+|---|---|---|
+| Round-trip ping | 3.3–4.2 ms | ~10 ms |
+| Tablet decode | 8.8 ms avg | 14–16 ms avg |
+| Dropped frames | 0 / 31 000+ | 0 |
+| Pen → ink (estimated) | 30–45 ms | 40–55 ms |
+
+A static handwriting page compresses at roughly **1300 : 1** — 2.65 MB raw frames going out as ~2 KB. That ratio is why the codec is non-negotiable: raw 2560×1600 at 60 fps is 2.9 Gbit/s against a USB 2.0 cable that carries ~300 Mbit/s.
+
+## Quick start
+
+**Requirements:** macOS 13+ (validated on 26), Xcode Command Line Tools, Android 9+ tablet with a stylus, USB-debugging enabled. For building the Android client: JDK 17 and the Android SDK (`sdkmanager` handles the rest).
 
 ```bash
-git clone https://github.com/tranvuongquocdat/SideScreen.git
-cd SideScreen
+git clone https://github.com/ankitmundada/VirtualPenTab.git
+cd VirtualPenTab
 
-# macOS
-cd MacHost && swift build -c release
+# Mac host
+./scripts/build_mac.sh            # produces SideScreen.app
+open SideScreen.app
 
-# Android
-cd AndroidClient && ./gradlew assembleDebug
+# Android client
+cd AndroidClient
+./gradlew assembleDebug
+adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
-</details>
 
----
+Then on the Mac press **Start**, and on the tablet open the app and connect (USB just works; Wi-Fi scans the QR shown on the Connect tab).
 
-## Usage
+### Two macOS permissions
 
-### USB mode (default — lowest latency)
+Both under **System Settings → Privacy & Security**:
 
-1. Connect tablet to Mac via **USB-C**
-2. Launch **Side Screen** on Mac (runs in menu bar — port forwarding is set up automatically)
-3. Open **Side Screen** on tablet → keep on the **USB** tab → tap **Connect**
-4. Done — drag windows to your new display
+| Permission | Needed for | If missing |
+|---|---|---|
+| **Screen Recording** | Capturing the virtual display | Nothing streams |
+| **Accessibility** | Injecting pen and touch events | **Video looks perfect, pen does nothing.** `CGEvent.post` fails silently. |
 
-### Wireless mode (new in 0.8.0 — no cable)
+### Stop macOS asking every rebuild
 
-1. Launch **Side Screen** on Mac → toggle to the **Wireless** tab → a QR code appears
-2. Open **Side Screen** on tablet → switch to the **Wireless** tab → tap **Scan QR Code** → grant camera permission → aim at the QR on the Mac
-3. The tablet remembers the Mac. Subsequent launches auto-reconnect — no rescan.
+An ad-hoc signature has no certificate, so macOS identifies the app by its binary hash and treats every rebuild as a new app. Create a free self-signed certificate once — **Keychain Access → Certificate Assistant → Create a Certificate**, name `SideScreen Local Signing`, type *Code Signing* — and `build_mac.sh` picks it up automatically. No trust setting needed. Full walkthrough in [docs/pen-support.md](docs/pen-support.md).
 
-Wireless mode requires both devices to be on the same WiFi network. **5 GHz is strongly recommended** — 2.4 GHz can introduce noticeable jitter on dynamic content. If you need to revoke access, click **Reset Token (forget all)** on the Mac and re-pair each tablet.
+### Xiaomi / MIUI note
 
-USB mode remains the lowest-latency option for drawing or fast-paced gaming. Wireless adds 10–50 ms depending on WiFi quality.
+`adb install` fails with `INSTALL_FAILED_USER_RESTRICTED` until you enable **Install via USB** and **USB debugging (Security settings)** in Developer options. MIUI may insist on a signed-in Mi account first; Wireless debugging sidesteps it.
 
-### Headless mode (new in 0.11.0 — no Mac interaction)
+## Things learned the hard way
 
-In Settings → Startup, turn on **Launch at Login** and **Auto-start streaming on launch**, then pick the **Startup mode** (USB or Wireless). On your next login the server starts automatically — just open Side Screen on the tablet and tap Connect (USB) or Reconnect (Wireless).
+Each of these looked like it worked until it didn't. Kept here because they're the kind of thing you only find by running the code on real hardware.
 
-First-time setup still needs a screen once to grant Screen Recording permission; after that the Mac runs fully headless. For wireless headless use, give the Mac a static IP or DHCP reservation, and consider enabling macOS Screen Sharing as a fallback way in.
+| Symptom | Cause | Fix |
+|---|---|---|
+| Strokes draw at constant width | Only the tablet pressure field was set; apps read the mouse one | Set `kCGMouseEventPressure` too — real Wacom hardware sets both |
+| Menu text tiny after "HiDPI" | Virtual display published two modes; macOS adopted the 1× anchor | Select the 2× mode explicitly after the display settles |
+| Rotated display comes out squashed | Rotation reoriented the client but never rebuilt the Mac's display | Rotation now rebuilds the display — without dropping the client |
+| Changing any display setting disconnects the tablet | Resolution change did `stopServer()` + `startServer()` | Rebuild display and capture in place; keep the socket |
+| Mac app hangs on connect | Encoder reconfigured on the main thread inside a `@Published` setter — a blocking XPC call | All encoder work on a dedicated queue |
+| Adaptive bitrate dives to the floor in 3 s | Congestion measured as *peak* in-flight bytes — one keyframe exceeded the threshold | Measure the *trough*: did the queue ever drain? |
+| Tilt at exactly 90° reads full-scale on the wrong axis | `cos(π/2)` in Float is `−4.4e-8`; `atan2(0, −tiny)` = π | Snap sub-epsilon components to zero |
+| Permissions re-requested after every build | Ad-hoc signing → new cdhash per build | Self-signed certificate; trust not required |
 
----
+## Status
 
-## Configuration
+**Verified on hardware:** pressure, hover, continuous strokes, cursor hiding, HiDPI, rotation, live reconfiguration, USB and Wi-Fi transport, adaptive bitrate under real congestion.
 
-| Setting | Options | Default |
-|---------|---------|---------|
-| Resolution | 720p to 8K, 30+ presets + custom | 1920x1200 |
-| Frame Rate | 30, 60, 90, 120 FPS | 120 |
-| Bitrate | 20–5000 Mbps | 1000 Mbps |
-| Quality | Ultra Low, Low, Medium, High | Ultra Low |
-| HiDPI (Retina) | On/Off | Off |
-| Gaming Boost | On/Off (1 Gbps, 120 Hz) | Off |
-| Touch Input | On/Off | On |
+**Implemented, not yet hardware-verified:**
+- **Tilt sign convention.** The math is unit-tested, but which physical direction is +tiltX on the Xiaomi digitizer has not been confirmed. If a tilt-sensitive brush feels mirrored, it's a one-line sign flip in `PenTilt.toCartesian`. `tools/capture-tilt.sh` records the raw digitizer values to settle it.
+- Barrel-button right-click and eraser tip.
 
----
+**Known limitations:**
+- Rebuilding the virtual display (rotation, resolution) makes macOS move its windows to the main display. Positions could be restored via the Accessibility API; Spaces assignment cannot — macOS doesn't expose it.
+- Hover is in-range / out-of-range only; the digitizer reports no graded height.
+- Link bandwidth for the advisor is a conservative constant, not measured. The adaptive controller makes this mostly moot.
 
-## Troubleshooting
+**Tests:** 115 checks on the Mac side (`swift run CoreTests`), 16 on Android (`./gradlew testDebugUnitTest`). XCTest isn't available without full Xcode, so the Swift tests run as a plain executable.
 
-<details>
-<summary><strong>"SideScreen is damaged" on macOS</strong></summary>
+## Repository layout
 
-This happens because the app is not notarized by Apple. Run this command to fix it:
-```bash
-sudo xattr -cr /Applications/SideScreen.app
 ```
-Then open the app again.
-</details>
+MacHost/
+  PenCore/          pen types + wire codec + CGEvent construction   (pure, tested)
+  DisplayCore/      panel geometry, display advisor, bitrate control (pure, tested)
+  CoreTests/        the test runner
+  Sources/          the app: PenInjector, StreamingServer, SettingsWindow, …
+AndroidClient/      Kotlin client: PenInput, PenEvent, PanelInfo, StreamClient
+docs/
+  pen-support.md          setup, permissions, troubleshooting
+  pen-support-design.md   design rationale, hardware measurements, protocol
+tools/
+  penspike/         standalone validator: do synthetic tablet events survive macOS?
+  capture-tilt.sh   read raw tilt from the digitizer
+```
 
-<details>
-<summary><strong>"Connection refused" on Android</strong></summary>
+## Credits
 
-The Mac app sets up `adb reverse` automatically when streaming starts. If it still fails, make sure `adb` is installed (via Android SDK or Homebrew: `brew install android-platform-tools`) and your device has USB debugging enabled.
-</details>
+Built on [SideScreen](https://github.com/tranvuongquocdat/SideScreen) by [@tranvuongquocdat](https://github.com/tranvuongquocdat) — the virtual display, video pipeline, transport and touch gestures are theirs. Forked at [`4f1a05b`](https://github.com/tranvuongquocdat/SideScreen/commit/4f1a05b). The stuck-button teardown safety follows the approach in upstream [PR #46](https://github.com/tranvuongquocdat/SideScreen/pull/46).
 
-<details>
-<summary><strong>High latency or stuttering</strong></summary>
-
-- Lower resolution or frame rate
-- Ensure H.265 hardware codec support on your device
-- For USB mode, use a high-quality USB-C cable (not charge-only)
-- For wireless mode, ensure both devices are on **5 GHz WiFi**, not 2.4 GHz; reduce refresh rate to 60 Hz if jitter persists
-</details>
-
-<details>
-<summary><strong>Wireless: "Couldn't reach Mac" / connection times out</strong></summary>
-
-- Both devices must be on the same WiFi network (and same subnet — some mesh routers isolate "guest" devices)
-- Click **Start** on the Mac before scanning the QR — the listener only binds when the server is running
-- If the Mac changes WiFi or its LAN IP, scan a fresh QR (the cached one points to the old address)
-- macOS may prompt for **Local Network** permission on first wireless toggle — grant it; without it, LAN inbound is silently dropped
-</details>
-
-<details>
-<summary><strong>Wireless: "Re-pair required" after restart / reinstall</strong></summary>
-
-The Mac's auth token resets when you click **Reset Token (forget all)** or reinstall the app. Tap **Scan QR Code** on the Android client and scan the new QR shown on the Mac.
-</details>
-
-<details>
-<summary><strong>Virtual display not appearing</strong></summary>
-
-Grant Screen Recording permission: **System Preferences → Privacy & Security → Screen Recording → Enable Side Screen**
-</details>
-
----
-
-## Contributing
-
-Contributions are welcome!
-
-- ⭐ **Star** this repo to help others discover it
-- 🐛 **Report bugs** via [Issues](https://github.com/tranvuongquocdat/SideScreen/issues)
-- 💡 **Suggest features** via [Issues](https://github.com/tranvuongquocdat/SideScreen/issues)
-- 🔧 **Submit PRs** — see [CONTRIBUTING.md](CONTRIBUTING.md)
-
----
-
-## Support
-
-If Side Screen is useful to you, consider supporting development:
-
-<div align="center">
-
-[![Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-FFDD00?style=for-the-badge&logo=buy-me-a-coffee&logoColor=black)](https://buymeacoffee.com/tranvuongqk)
-[![GitHub Sponsors](https://img.shields.io/badge/GitHub%20Sponsors-EA4AAA?style=for-the-badge&logo=github-sponsors&logoColor=white)](https://github.com/sponsors/tranvuongquocdat)
-[![VietQR](https://img.shields.io/badge/Vietnam-VietQR-DA251D?style=for-the-badge&logoColor=white)](https://sidescreen.dev/donate.html)
-
-</div>
-
-🇻🇳 Vietnamese users — scan VietQR for a local bank transfer (no international fees) at [sidescreen.dev/donate](https://sidescreen.dev/donate.html).
-
----
+Developed with [Claude Code](https://claude.com/claude-code).
 
 ## License
 
-[MIT License](LICENSE) — free for personal and commercial use.
-
----
-
-<div align="center">
-
-Made with ❤️ by **Tran Vuong Quoc Dat**
-
-[Report Bug](https://github.com/tranvuongquocdat/SideScreen/issues) · [Request Feature](https://github.com/tranvuongquocdat/SideScreen/issues) · [Discussions](https://github.com/tranvuongquocdat/SideScreen/discussions)
-
-</div>
+[MIT](LICENSE) — same as upstream.
